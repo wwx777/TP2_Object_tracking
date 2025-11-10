@@ -31,34 +31,39 @@ class ROISelector:
         clone = frame.copy()
         cv2.namedWindow(window_name)
         cv2.setMouseCallback(window_name, self._mouse_callback)
-        
+
         while True:
-            cv2.imshow(window_name, frame)
-            key = cv2.waitKey(1) & 0xFF
-            # if the ROI is defined, draw it!
-            if (self.roi_defined):
-                # draw a green rectangle around the region of interest
-                cv2.rectangle(frame, (self.r, self.c), (self.r+self.h, self.c+self.w), (0, 255, 0), 2)
-            # else reset the image...
-            else:
-                frame = clone.copy()
-            # if the 'q' key is pressed, break from the loop
-            if key == ord("q"):
+            frame_disp = clone.copy()
+            if self.roi_defined:
+                cv2.rectangle(frame_disp, (self.r, self.c),
+                            (self.r + self.w, self.c + self.h), (0, 255, 0), 2)
+
+            cv2.imshow(window_name, frame_disp)
+            key = cv2.waitKey(30) & 0xFF
+        
+            # 检查窗口是否关闭
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
                 break
         
+            # ESC 或 q 退出
+            if key in (27, ord('q')):
+                break
+
         cv2.destroyWindow(window_name)
         return (self.r, self.c, self.w, self.h)
 
 
 def visualize_tracking(frame, track_window, window_name='Tracking', 
                        color=(255, 0, 0), thickness=2):
-    """在帧上绘制跟踪框"""
+    """
+    在帧上绘制跟踪框
+    注意：不要在这里处理按键，让主循环处理
+    """
     r, c, w, h = track_window
     frame_with_box = frame.copy()
-    cv2.rectangle(frame_with_box, (r, c), (r + h, c + w), color, thickness)
+    cv2.rectangle(frame_with_box, (r, c), (r + w, c + h), color, thickness)
     cv2.imshow(window_name, frame_with_box)
-    cv2.waitKey(1)
-    return frame_with_box
+    return frame_with_box  # ✅ 只显示，不处理按键
 
 
 def save_frame(frame, frame_number, output_dir='results/frames'):

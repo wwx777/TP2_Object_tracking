@@ -12,7 +12,6 @@ class ClassicalTracker:
     经典跟踪方法基类
     支持 Mean Shift 和 Hough Transform
     """
-    
     def __init__(self, video_path, method='meanshift', **kwargs):
         """
         Args:
@@ -29,7 +28,6 @@ class ClassicalTracker:
         self.track_window = None
         self.model = None  # 直方图或R-Table
         self.velocity = np.array([0.0, 0.0])
-        
         # Mean Shift 配置
         self.color_space = kwargs.get('color_space', 'hue')
         self.update_model = kwargs.get('update_model', False)
@@ -38,6 +36,8 @@ class ClassicalTracker:
         # Mean Shift 终止条件
         self.term_crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 
                          10, 1)
+        # Hough Transform 配置
+        self.gradient_threshold = kwargs.get('gradient_threshold', 30)
     
     def select_roi(self, frame):
         """选择ROI"""
@@ -78,8 +78,7 @@ class ClassicalTracker:
         self.model = extract_color_histogram(
             roi_region, 
             feature_type=self.color_space
-        )
-        
+        )        
         print(f"Mean Shift initialized with {self.color_space} histogram")
     
     def update(self, frame):
@@ -145,20 +144,25 @@ class ClassicalTracker:
         self.model = cv2.addWeighted(self.model, 1-alpha, 
                                      current_hist, alpha, 0)
     
+    
+    def _init_hough(self, frame, roi):
+        """
+        Q3-Q4: Hough Transform 初始化
+        """
+        raise NotImplementedError("Q4: Will build R-Table here")
+
+# 添加 Hough 更新方法（Q4会用到）
+    def _update_hough(self, frame):
+        """
+        Q3-Q4: Hough Transform 更新
+        """
+        raise NotImplementedError("Q4: Will compute Hough transform here")
+
     def track_video(self, visualize=True, save_result=False, 
-                   visualize_process=False, output_dir='results/frames'):
-        """
-        在整个视频上跟踪
-        
-        Args:
-            visualize: 是否可视化
-            save_result: 是否保存结果帧
-            visualize_process: Q2专用 - 是否可视化中间过程（Hue图和权重图）
-            output_dir: 输出目录
-        """
+               visualize_process=False, output_dir='results/frames'):
+        """在整个视频上跟踪"""
         cap = cv2.VideoCapture(self.video_path)
         
-        # 读取第一帧
         ret, frame = cap.read()
         if not ret:
             print("Error: Cannot read video")
@@ -168,11 +172,11 @@ class ClassicalTracker:
         print("Step 1: Select ROI")
         roi = self.select_roi(frame)
         
-        # 2. 初始化跟踪器
+        # 2. 初始化
         print("Step 2: Initialize tracker")
         self.initialize(frame, roi)
         
-        # 3. 逐帧跟踪
+        # 3. 跟踪
         print("Step 3: Start tracking")
         print("Press 's' to save frame, 'ESC' to exit")
         
@@ -193,6 +197,38 @@ class ClassicalTracker:
                     frame, 
                     new_window, 
                     window_name='Tracking Result',
-                    color=(255, 0, 0),  # 蓝色
+                    color=(255, 0, 0),
                     thickness=2
                 )
+                
+                # Q2: 可视化中间过程
+                if visualize_process and self.method == 'meanshift':
+                    visualize_hue_and_backprojection(
+                        frame, 
+                        self.model, 
+                        new_window,
+                        save_dir=output_dir if save_result else None,  # ✅ 传递保存路径
+                        frame_num=frame_count  # ✅ 传递帧编号
+                    )
+            
+            # 保存
+            if save_result:
+                save_frame(frame_with_box, frame_count, output_dir)
+            
+            # ✅ 关键：在主循环处理按键
+            key = cv2.waitKey(60) & 0xFF
+            if key == 27:  # ESC
+                print("\nTracking stopped by user")
+                break
+            elif key == ord('s'):
+                save_frame(frame_with_box, frame_count, output_dir)
+                print(f"Saved frame {frame_count}")
+            
+            frame_count += 1
+        
+        # ✅ 清理资源
+        cap.release()
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
+        
+        print(f"\n✅ Tracking completed. Total frames: {frame_count}")
