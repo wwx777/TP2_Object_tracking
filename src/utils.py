@@ -3,6 +3,8 @@ Utility functions for tracking
 """
 import cv2
 import os
+import numpy as np
+
 
 
 class ROISelector:
@@ -20,8 +22,10 @@ class ROISelector:
             
         elif event == cv2.EVENT_LBUTTONUP:
             r2, c2 = x, y
-            self.h = abs(r2 - self.r)
-            self.w = abs(c2 - self.c)
+            # 修复：r是x(列)，c是y(行)
+            # w = 宽度(x方向), h = 高度(y方向)
+            self.w = abs(r2 - self.r)
+            self.h = abs(c2 - self.c)
             self.r = min(self.r, r2)
             self.c = min(self.c, c2)
             self.roi_defined = True
