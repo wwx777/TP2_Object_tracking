@@ -51,11 +51,6 @@ We integrate recent SOTA methods for comparison. **Note: Pick ONE to run due to 
   - Easy to understand and implement
 - **Performance**: LaSOT AUC 69.9%, TrackingNet AUC 86.1%
 
-**Usage:**
-```bash
-cd sota_methods/seqtrack
-python demo.py --video_path ../../data/Sequences/Antoine_Mug.mp4
-```
 
 #### **Option 2: ARTrackV2 (CVPR 2024)** ⭐⭐ **Recommended - Latest SOTA**
 - **Paper**: "ARTrackV2: Prompting Autoregressive Tracker Where to Look and How to Describe"
@@ -81,11 +76,6 @@ python demo.py --video_path ../../data/Sequences/Antoine_Mug.mp4
   - First CPU real-time transformer tracker
 - **Performance**: LaSOT AUC 70.6%, TNL2k AUC 57.4%
 
-**Usage:**
-```bash
-cd sota_methods/mixformerv2
-python demo.py --video_path ../../data/Sequences/Antoine_Mug.mp4
-```
 
 #### **Other ICCV/CVPR 2024-2025 Methods** (Optional)
 
