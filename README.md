@@ -7,7 +7,6 @@ Implementation and comparison of classical and deep learning object tracking alg
 ## 📂 Project Structure
 
 ```
-```
 object_tracking/
 ├── src/                          # Core source code
 │   ├── classical_tracker.py     # Classical tracker (Strategy Pattern)
@@ -41,7 +40,7 @@ object_tracking/
 
 ---
 
-## �️ 架构设计
+##  架构设计
 
 ### 核心设计模式：**策略模式 (Strategy Pattern)**
 
