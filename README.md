@@ -400,10 +400,67 @@ tracker.track_video(visualize=True)
 
 ---
 
-### Q6: Deep Learning (TODO)
-- [ ] Implement `DeepTracker` class
-- [ ] Integrate pre-trained CNN features
-- [ ] Feature selection and dimensionality reduction
+### Q6: Deep Learning-based Tracking (✅ Explained)
+
+**Question**: How to improve histogram and Hough-based tracking using CNN features?
+
+**Solution**:
+- Replace color histograms/gradients with CNN feature channels
+- Use pre-trained network (ResNet-50 recommended)
+- Smart layer and channel selection strategies
+
+#### Key Concepts:
+
+**1. Layer Selection Strategy:**
+- **Criteria**:
+  - Receptive Field (RF) should match object size
+  - Mid-level layers (layer3/conv4_3) provide best balance
+  - Higher resolution → better localization
+- **Recommendation**: 
+  - ResNet-50 `layer3` (1024 channels, 14×14, RF=267px)
+  - VGG-16 `conv4_3` (512 channels, 28×28, RF=52px)
+
+**2. Channel Selection Methods:**
+- **Variance-based**: Select high-variance channels (discriminative)
+- **Max Response**: Select high-activation channels (relevant)
+- **Gradient-based**: Select channels with strong edges (structural)
+- **Recommendation**: Use variance or gradient method, select top K=32-64 channels
+
+**3. Integration Approaches:**
+
+**A. Deep Mean-shift:**
+```
+Traditional: Color Histogram → Back-projection → Mean-shift
+Deep:        CNN Features → Feature "Histogram" → Mean-shift
+```
+- Build multi-dimensional histogram from selected channels
+- Compute back-projection using feature similarity
+- Apply standard mean-shift algorithm
+
+**B. Deep Hough Transform:**
+```
+Traditional: Image Gradients → R-Table → Voting
+Deep:        Feature Gradients → R-Table → Voting
+```
+- Compute gradients on CNN feature maps
+- Build R-Table from feature orientations
+- Vote using semantic edge information
+
+#### Advantages:
+- ✅ **Illumination robustness**: CNN features normalized during training
+- ✅ **Semantic understanding**: Distinguish objects beyond color
+- ✅ **Better discrimination**: Learned features > hand-crafted
+
+#### Trade-offs:
+- ❌ **Speed**: ~10-50ms per frame (GPU required)
+- ❌ **Memory**: ~50-100MB feature maps
+- ❌ **Domain**: Trained on ImageNet, may not generalize everywhere
+
+#### Implementation:
+See `src/deep_tracker.py` for complete implementation:
+- `CNNFeatureExtractor`: Extract features from pre-trained networks
+- `DeepMeanShiftTracker`: Mean-shift using CNN features
+- Detailed documentation and selection strategies included
 
 ---
 
