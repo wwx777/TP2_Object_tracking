@@ -358,13 +358,50 @@ tracker.track_video(visualize=True, visualize_process=True, save_result=True)
 
 ---
 
-## 🚀 Future Extensions
+## 🚀 Advanced Features
 
-### Q5: Motion Prediction
-- [ ] Add Kalman filter
-- [ ] Velocity prediction for improved search region
+### Q5: Predictive Tracking (✅ Implemented)
 
-### Q6: Deep Learning
+**Method**: `predictive_meanshift`
+
+**Key Features**:
+1. **Kalman Filter Prediction**: Predicts next frame position using state `[x, y, vx, vy]`
+   - Exploits motion smoothness
+   - Handles occlusion and fast motion
+   - Reduces search space
+
+2. **Adaptive Model Update**: Updates histogram model based on confidence
+   - Confidence score: Bhattacharyya distance between current and model histograms
+   - Update rate: `α = α_base × (1 - confidence)`
+   - Only updates when confidence > threshold
+
+3. **Confidence-based Search**: Expands search window when uncertain
+   - High confidence: use predicted window
+   - Low confidence: expand search by `search_expansion_factor`
+
+**Usage**:
+```python
+tracker = ClassicalTracker(
+    video_path='video.mp4',
+    method='predictive_meanshift',
+    color_space='hue',
+    update_model=True,
+    update_rate=0.05,
+    confidence_threshold=0.6,
+    search_expansion_factor=1.5
+)
+tracker.track_video(visualize=True)
+```
+
+**Advantages**:
+- ✅ Robust to appearance changes
+- ✅ Better handles fast motion
+- ✅ Reduces drift over long sequences
+- ✅ Adapts search strategy based on confidence
+
+---
+
+### Q6: Deep Learning (TODO)
 - [ ] Implement `DeepTracker` class
 - [ ] Integrate pre-trained CNN features
 - [ ] Feature selection and dimensionality reduction
