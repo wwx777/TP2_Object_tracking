@@ -55,7 +55,6 @@ class CNNFeatureExtractor:
         self.model_name = model_name
         
         # Load pre-trained model (使用 ImageNet 预训练权重)
-        # 这些模型已经在 140 万张图片上训练好了！
         if model_name == 'resnet50':
             self.model = models.resnet50(pretrained=True)  # ← ImageNet 预训练
             self.layers_info = self._get_resnet_layers()
@@ -140,15 +139,13 @@ class CNNFeatureExtractor:
         
         Args:
             frame: BGR image (H, W, 3)
-            roi: (r, c, w, h) region of interest, None for whole frame
+            roi: Not used - always extracts from whole frame for tracking
         
         Returns:
-            features: (C, H, W) feature map
+            features: (C, H, W) feature map from entire frame
         """
-        # Crop ROI if specified
-        if roi is not None:
-            r, c, w, h = roi
-            frame = frame[c:c+h, r:r+w]
+        # Always process the entire frame for tracking
+        # (ROI selection happens in feature space, not image space)
         
         # Convert BGR to RGB
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -200,46 +197,74 @@ class CNNFeatureExtractor:
                 return 'conv4_3'
     
     def select_best_channels(self, features: torch.Tensor, roi: Tuple[int, int, int, int], 
-                           method='variance', top_k=64) -> List[int]:
+                           method='variance', top_k=64, frame_shape=None) -> List[int]:
         """
         Select best channels from feature map.
         
-        Methods:
-        1. 'variance': High variance channels (more discriminative)
-        2. 'max_response': Channels with highest activation in ROI
-        3. 'gradients': Channels with strong gradients (edges)
-        
         Args:
             features: (C, H, W) feature map
-            roi: (r, c, w, h) region of interest in feature space
+            roi: (x, y, w, h) region of interest in image space
             method: Channel selection method
             top_k: Number of channels to select
+            frame_shape: (height, width) of original frame
         
         Returns:
             channel_indices: List of selected channel indices
         """
         C, H, W = features.shape
         
-        # Map ROI from image space to feature space
-        # Assume features are downsampled uniformly
-        scale_h = H / 224.0
-        scale_w = W / 224.0
-        r, c, w, h = roi
-        r_feat = int(r * scale_w)
-        c_feat = int(c * scale_h)
+        # Default frame shape
+        if frame_shape is None:
+            frame_h, frame_w = 224, 224
+        else:
+            frame_h, frame_w = frame_shape
+        
+        # Map ROI from image space (x,y,w,h) to feature space
+        scale_h = H / frame_h
+        scale_w = W / frame_w
+        x, y, w, h = roi
+        # x->col, y->row
+        x_feat = int(x * scale_w)
+        y_feat = int(y * scale_h)
         w_feat = max(1, int(w * scale_w))
         h_feat = max(1, int(h * scale_h))
         
         # Clamp to feature map bounds
-        r_feat = max(0, min(W - w_feat, r_feat))
-        c_feat = max(0, min(H - h_feat, c_feat))
+        x_feat = max(0, min(W - w_feat, x_feat))
+        y_feat = max(0, min(H - h_feat, y_feat))
         
-        # Extract ROI features
-        roi_features = features[:, c_feat:c_feat+h_feat, r_feat:r_feat+w_feat]  # (C, h, w)
+        # Extract ROI features [C, H, W] -> [C, h, w]
+        roi_features = features[:, y_feat:y_feat+h_feat, x_feat:x_feat+w_feat]
         
         if method == 'variance':
-            # High variance = more discriminative
-            channel_scores = roi_features.reshape(C, -1).var(dim=1).cpu().numpy()
+            # Improved: Consider both variance within ROI and contrast with background
+            roi_flat = roi_features.reshape(C, -1)
+            roi_var = roi_flat.var(dim=1)  # Variance within ROI
+            roi_mean = roi_flat.mean(dim=1)  # Mean of ROI
+            
+            # Sample background (expand ROI by 50% on each side)
+            bg_x1 = max(0, x_feat - w_feat // 4)
+            bg_y1 = max(0, y_feat - h_feat // 4)
+            bg_x2 = min(W, x_feat + w_feat + w_feat // 4)
+            bg_y2 = min(H, y_feat + h_feat + h_feat // 4)
+            
+            # Create mask for background (exclude ROI)
+            mask = torch.ones((H, W), dtype=torch.bool, device=features.device)
+            mask[y_feat:y_feat+h_feat, x_feat:x_feat+w_feat] = False
+            
+            # Get background features
+            bg_features = features[:, bg_y1:bg_y2, bg_x1:bg_x2]
+            bg_mask = mask[bg_y1:bg_y2, bg_x1:bg_x2]
+            bg_flat = bg_features.reshape(C, -1)[:, bg_mask.reshape(-1)]
+            bg_mean = bg_flat.mean(dim=1) if bg_flat.numel() > 0 else roi_mean
+            
+            # Contrast: absolute difference between ROI and background
+            contrast = torch.abs(roi_mean - bg_mean)
+            
+            # Combined score: variance + contrast (both normalized)
+            roi_var_norm = roi_var / (roi_var.max() + 1e-6)
+            contrast_norm = contrast / (contrast.max() + 1e-6)
+            channel_scores = (0.5 * roi_var_norm + 0.5 * contrast_norm).cpu().numpy()
         
         elif method == 'max_response':
             # High activation = strong response to object
@@ -289,196 +314,299 @@ class DeepMeanShiftTracker:
         self.term_crit = term_crit
         
         self.selected_channels = None
-        self.model_hist = None
+        self.model_features = None  # ROI feature template (K-dim vector) - our "kernel"
         self.track_window = None
     
     def init(self, frame: np.ndarray, roi: Tuple[int, int, int, int]):
-        """Initialize tracker with first frame."""
+        """
+        Initialize tracker with first frame.
+        
+        Args:
+            frame: BGR image (H, W, 3)
+            roi: (x, y, w, h) region of interest in image coordinates
+        """
+        # Keep ROI in (x, y, w, h) format for cv2.meanShift
+        self.track_window = roi
+        
         # Register hook for target layer
         self.extractor.register_hooks(self.layer_name)
         
-        # Extract features
+        # Extract features from entire frame (not ROI)
         features = self.extractor.extract_features(frame)  # (C, H, W)
         
-        # Select best channels
+        # Select best channels using the ROI
         self.selected_channels = self.extractor.select_best_channels(
-            features, roi, method=self.channel_selection, top_k=self.top_k_channels
+            features, roi, method=self.channel_selection, top_k=self.top_k_channels,
+            frame_shape=(frame.shape[0], frame.shape[1])
         )
         
-        # Build feature histogram model
-        self.model_hist = self._build_feature_histogram(features, roi)
-        self.track_window = roi
+        # Store ROI feature template (direct features, not histogram!)
+        self.model_features = self._extract_roi_features(features, roi, 
+                                                         frame_shape=(frame.shape[0], frame.shape[1]))
     
-    def _build_feature_histogram(self, features: torch.Tensor, 
-                                 roi: Tuple[int, int, int, int]) -> np.ndarray:
+    def _extract_roi_features(self, features: torch.Tensor, 
+                              roi: Tuple[int, int, int, int], frame_shape=None) -> np.ndarray:
         """
-        Build histogram from selected CNN features.
+        Extract and store ROI feature template directly (no histogram quantization).
         
-        Each channel is quantized to bins, creating a multi-dimensional histogram.
+        Returns:
+            roi_template: Average feature vector in ROI (K,) - this is our "kernel"
         """
         # Extract selected channels
         features_np = features[self.selected_channels].cpu().numpy()  # (K, H, W)
         
-        # Map ROI to feature space
+        # Default frame shape
+        if frame_shape is None:
+            frame_h, frame_w = 224, 224
+        else:
+            frame_h, frame_w = frame_shape
+        
+        # Map ROI from image space (x,y,w,h) to feature space
         C, H, W = features.shape
-        scale_h = H / 224.0
-        scale_w = W / 224.0
-        r, c, w, h = roi
-        r_feat = int(r * scale_w)
-        c_feat = int(c * scale_h)
+        scale_h = H / frame_h
+        scale_w = W / frame_w
+        x, y, w, h = roi
+        # x->col, y->row in feature map
+        x_feat = int(x * scale_w)
+        y_feat = int(y * scale_h)
         w_feat = max(1, int(w * scale_w))
         h_feat = max(1, int(h * scale_h))
-        r_feat = max(0, min(W - w_feat, r_feat))
-        c_feat = max(0, min(H - h_feat, c_feat))
+        # Clamp to feature map bounds
+        x_feat = max(0, min(W - w_feat, x_feat))
+        y_feat = max(0, min(H - h_feat, y_feat))
         
-        # Extract ROI features
-        roi_features = features_np[:, c_feat:c_feat+h_feat, r_feat:r_feat+w_feat]  # (K, h, w)
+        # Extract ROI features (features_np is [K, H, W], indexing is [K, row, col])
+        roi_features = features_np[:, y_feat:y_feat+h_feat, x_feat:x_feat+w_feat]  # (K, h, w)
         
-        # Quantize each channel to 16 bins
-        bins = 16
-        hist = np.zeros((self.top_k_channels, bins))
+        # Compute average feature vector in ROI - this is our template/kernel
+        # Shape: (K,) where K is number of selected channels
+        roi_template = roi_features.mean(axis=(1, 2))  # Average over spatial dimensions
         
-        for i, channel_features in enumerate(roi_features):
-            # Normalize to [0, 1]
-            feat_min = channel_features.min()
-            feat_max = channel_features.max()
-            if feat_max > feat_min:
-                normalized = (channel_features - feat_min) / (feat_max - feat_min)
-            else:
-                normalized = np.zeros_like(channel_features)
-            
-            # Compute histogram
-            hist[i], _ = np.histogram(normalized, bins=bins, range=(0, 1))
+        # Normalize to unit vector for cosine similarity
+        norm = np.linalg.norm(roi_template)
+        if norm > 0:
+            roi_template = roi_template / norm
         
-        # Normalize histogram
-        hist = hist / (hist.sum() + 1e-6)
-        return hist
+        return roi_template
     
     def update(self, frame: np.ndarray) -> Tuple[int, int, int, int]:
-        """Update tracking window using mean-shift."""
+        """
+        Update tracking window using mean-shift.
+        
+        Returns:
+            new_roi: (x, y, w, h) region of interest in image coordinates
+        """
         # Extract features
         features = self.extractor.extract_features(frame)
         features_np = features[self.selected_channels].cpu().numpy()  # (K, H, W)
         
-        # Compute back-projection (similarity to model histogram)
-        backproj = self._compute_backprojection(features_np)
+        # Compute back-projection using cosine similarity (not histogram lookup!)
+        backproj = self._compute_similarity_map(features_np)
         
-        # Apply mean-shift
-        r, c, w, h = self.track_window
-        ret, new_window = cv2.meanShift(backproj, (r, c, w, h), self.term_crit)
+        # Resize backprojection to match frame size
+        frame_h, frame_w = frame.shape[:2]
+        backproj_resized = cv2.resize(backproj, (frame_w, frame_h))
+        
+        # Apply mean-shift with (x, y, w, h) format
+        x, y, w, h = self.track_window
+        ret, new_window = cv2.meanShift(backproj_resized, (x, y, w, h), self.term_crit)
+        
+        # Validate and fix the new window to ensure positive dimensions
+        x_new, y_new, w_new, h_new = new_window
+        
+        # Ensure positive dimensions (meanShift can sometimes return weird values)
+        if w_new <= 0 or h_new <= 0:
+            # Keep the original window if meanShift failed
+            print(f"⚠️  Warning: meanShift returned invalid window {new_window}, keeping previous window")
+            new_window = self.track_window
+        else:
+            # Clip to frame boundaries
+            x_new = max(0, min(x_new, frame_w - 1))
+            y_new = max(0, min(y_new, frame_h - 1))
+            w_new = min(w_new, frame_w - x_new)
+            h_new = min(h_new, frame_h - y_new)
+            new_window = (x_new, y_new, w_new, h_new)
         
         self.track_window = new_window
-        return new_window
+        return new_window  # (x, y, w, h)
     
-    def _compute_backprojection(self, features_np: np.ndarray) -> np.ndarray:
-        """Compute back-projection from CNN features."""
+    def _compute_similarity_map(self, features_np: np.ndarray) -> np.ndarray:
+        """
+        Compute similarity map using cosine similarity between each position and ROI template.
+        This directly uses the CNN features as "kernels" - no histogram quantization!
+        
+        Think of it as: each spatial position has a K-dimensional feature vector,
+        we compute how similar it is to the ROI's average feature vector.
+        
+        Returns:
+            similarity_map: Cosine similarity map [0, 255]
+        """
         K, H, W = features_np.shape
-        backproj = np.zeros((H, W), dtype=np.float32)
         
-        bins = 16
+        # Reshape features: (K, H, W) -> (K, H*W) -> (H*W, K)
+        features_flat = features_np.reshape(K, -1).T  # (H*W, K)
         
-        for i in range(K):
-            channel_features = features_np[i]
-            
-            # Normalize
-            feat_min = channel_features.min()
-            feat_max = channel_features.max()
-            if feat_max > feat_min:
-                normalized = (channel_features - feat_min) / (feat_max - feat_min)
-            else:
-                normalized = np.zeros_like(channel_features)
-            
-            # Quantize to bins
-            quantized = np.clip((normalized * bins).astype(int), 0, bins - 1)
-            
-            # Look up histogram values
-            channel_backproj = self.model_hist[i][quantized]
-            backproj += channel_backproj
+        # Normalize each feature vector to unit length for cosine similarity
+        norms = np.linalg.norm(features_flat, axis=1, keepdims=True)
+        norms[norms == 0] = 1  # Avoid division by zero
+        features_normalized = features_flat / norms  # (H*W, K)
         
-        # Normalize to [0, 255]
-        backproj = (backproj / K * 255).astype(np.uint8)
-        return backproj
+        # Compute cosine similarity with ROI template (already normalized in init)
+        # similarity = features_normalized @ model_features
+        # Shape: (H*W, K) @ (K,) -> (H*W,)
+        similarity = features_normalized @ self.model_features  # (H*W,)
+        
+        # Reshape back to spatial dimensions
+        similarity_map = similarity.reshape(H, W)
+        
+        # Convert from [-1, 1] to [0, 1] then to [0, 255]
+        # High similarity (close to 1) -> bright (255)
+        # Low similarity (close to -1) -> dark (0)
+        similarity_map = (similarity_map + 1) / 2  # [-1,1] -> [0,1]
+        similarity_map = np.clip(similarity_map * 255, 0, 255)
+        
+        return similarity_map.astype(np.uint8)
 
 
 # ====================================================================================
 # Explanation: How to choose the best layer and channels
 # ====================================================================================
 
-"""
-Q6: Layer and Channel Selection Strategy
 
-1. **Best Layer Selection:**
+class DeepTracker:
+    """
+    Wrapper class for deep learning-based tracking with video processing capabilities.
+    Provides the same interface as ClassicalTracker.
+    """
+    
+    def __init__(self, video_path: str, model_name: str = 'resnet50', 
+                 layer_name: str = 'layer3', top_k_channels: int = 64,
+                 channel_selection: str = 'variance', device: str = 'cpu'):
+        """
+        Args:
+            video_path: Path to input video
+            model_name: CNN model ('resnet50' or 'vgg16')
+            layer_name: Layer to extract features from
+            top_k_channels: Number of channels to use
+            channel_selection: Method for channel selection
+            device: 'cpu' or 'cuda'
+        """
+        self.video_path = video_path
+        
+        # Initialize CNN feature extractor
+        self.feature_extractor = CNNFeatureExtractor(
+            model_name=model_name,
+            device=device
+        )
+        
+        # Initialize deep mean-shift tracker
+        self.tracker = DeepMeanShiftTracker(
+            extractor=self.feature_extractor,
+            layer_name=layer_name,
+            top_k_channels=top_k_channels,
+            channel_selection=channel_selection
+        )
+        
+        self.initialized = False
+    
+    def select_roi(self, frame: np.ndarray) -> Tuple[int, int, int, int]:
+        """
+        Let user select ROI interactively.
+        
+        Returns:
+            roi: (x, y, w, h) in image coordinates
+        """
+        from .utils import ROISelector
+        return ROISelector().select_roi(frame)
+    
+    def initialize(self, frame: np.ndarray, roi: Tuple[int, int, int, int]):
+        """Initialize tracker with first frame."""
+        self.tracker.init(frame, roi)
+        self.initialized = True
+    
+    def update(self, frame: np.ndarray) -> Tuple[int, int, int, int]:
+        """Update tracking window."""
+        if not self.initialized:
+            raise RuntimeError("Tracker not initialized. Call initialize() first.")
+        return self.tracker.update(frame)
+    
+    def track_video(self, visualize=True, save_result=False, output_dir='results/deep_tracking', 
+                   visualize_backproj=False):
+        """Track object in video with interactive ROI selection."""
+        cap = cv2.VideoCapture(self.video_path)
+        ret, frame = cap.read()
+        if not ret:
+            print("Error: Cannot read video")
+            return
 
-   Criteria:
-   a) Receptive Field (RF): Should match object size
-      - Small objects (< 64px): Use early/mid layers (RF 50-100px)
-      - Medium objects (64-128px): Use mid layers (RF 100-300px)
-      - Large objects (> 128px): Use mid/late layers (RF 200-400px)
-   
-   b) Semantic Level:
-      - Low-level (conv1, layer1): Edges, textures → Good for texture-rich objects
-      - Mid-level (layer2, layer3): Object parts → Best for general tracking
-      - High-level (layer4, fc): Whole object → Too abstract for tracking
-   
-   c) Spatial Resolution:
-      - Higher resolution → Better localization precision
-      - Lower resolution → More robust to deformation
-   
-   **Recommendation**: layer3 (ResNet) / conv4_3 (VGG)
-   - Good balance of semantics and spatial resolution
-   - RF = 267px (ResNet) / 52px (VGG)
-   - Works for most tracking scenarios
+        print("Step 1: Select ROI")
+        roi = self.select_roi(frame)
 
-2. **Best Channels Selection:**
+        print("Step 2: Initialize tracker")
+        self.initialize(frame, roi)
 
-   Methods:
-   
-   a) **Variance-based**: Select channels with high variance in ROI
-      - High variance = more discriminative features
-      - Works well for textured objects
-      - Fast to compute
-   
-   b) **Max Response**: Select channels with highest activation
-      - Strong response = relevant to object
-      - Good for salient objects
-      - May include background-activated channels
-   
-   c) **Gradient-based**: Select channels with strong edges
-      - Strong gradients = structural information
-      - Robust to illumination changes
-      - Best for structured objects
-   
-   **Recommendation**: Variance-based or Gradient-based
-   - Use top 32-64 channels (balance between discrimination and robustness)
-   - Can combine multiple methods (ensemble selection)
+        print("Step 3: Start tracking")
+        print("Press 's' to save frame, 'b' to toggle backproj, 'ESC' to exit")
 
-3. **Integration into Mean-shift:**
+        frame_count = 1
+        show_backproj = visualize_backproj
+        
+        if save_result:
+            import os
+            os.makedirs(output_dir, exist_ok=True)
+        
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
 
-   Traditional: Color histogram → Back-projection → Mean-shift
-   Deep:       CNN features → Feature "histogram" → Mean-shift
-   
-   Advantages:
-   - CNN features are more robust to illumination changes
-   - Better semantic understanding of object vs background
-   - Can track objects with similar colors
-   
-   Trade-offs:
-   - Slower (CNN forward pass ~10-50ms)
-   - Requires GPU for real-time tracking
-   - Higher memory usage
+            new_window = self.update(frame)
+            
+            # Draw tracking box (needed for both visualization and saving)
+            from .utils import visualize_tracking
+            frame_with_box = visualize_tracking(
+                frame, new_window, window_name='Deep Tracking Result' if visualize else None,
+                color=(0, 255, 0), thickness=2
+            )
+            
+            if visualize:
+                # Show backprojection for debugging
+                if show_backproj:
+                    features = self.tracker.extractor.extract_features(frame)
+                    features_np = features[self.tracker.selected_channels].cpu().numpy()
+                    backproj = self.tracker._compute_similarity_map(features_np)
+                    backproj_resized = cv2.resize(backproj, (frame.shape[1], frame.shape[0]))
+                    
+                    # Convert to color heatmap (like classical meanshift visualization)
+                    backproj_norm = cv2.normalize(backproj_resized, None, 0, 255, cv2.NORM_MINMAX)
+                    backproj_colored = cv2.applyColorMap(backproj_norm.astype(np.uint8), cv2.COLORMAP_JET)
+                    
+                    # Show side-by-side: original frame + backprojection
+                    combined = np.hstack([frame, backproj_colored])
+                    cv2.imshow('Backprojection (press b to toggle)', combined)
 
-4. **Integration into Hough Transform:**
+            if save_result:
+                from .utils import save_frame
+                save_frame(frame_with_box, frame_count, output_dir)
 
-   Traditional: Gradient orientation → R-Table → Voting
-   Deep:       CNN feature gradients → R-Table → Voting
-   
-   Advantages:
-   - More robust edge/structure detection
-   - Better handling of cluttered backgrounds
-   - Can capture semantic boundaries
-   
-   Implementation:
-   - Use feature gradients instead of image gradients
-   - Build R-Table from feature map edges
-   - Vote using feature-based orientations
-"""
+            key = cv2.waitKey(60) & 0xFF
+            if key == 27:
+                print("\nTracking stopped by user")
+                break
+            elif key == ord('s'):
+                from .utils import save_frame
+                save_frame(frame_with_box, frame_count, output_dir)
+                print(f"Saved frame {frame_count}")
+            elif key == ord('b'):
+                show_backproj = not show_backproj
+                print(f"Backprojection visualization: {'ON' if show_backproj else 'OFF'}")
+
+            frame_count += 1
+
+        cap.release()
+        cv2.destroyAllWindows()
+        cv2.waitKey(1)
+        print(f"\n✅ Tracking completed. Total frames: {frame_count}")
+        if save_result:
+            print(f"   Output directory: {output_dir}")
+        print("=" * 60)
