@@ -4,6 +4,8 @@ Utility functions for tracking
 import cv2
 import os
 import numpy as np
+import csv
+import json
 
 
 
@@ -104,3 +106,32 @@ def save_frame(frame, frame_number, output_dir='results/frames'):
     filename = f"{output_dir}/Frame_{frame_number:04d}.png"
     cv2.imwrite(filename, frame)
     return filename
+
+
+def save_prediction(output_dir, frame_number, box, preds_file='predictions.csv'):
+    """
+    Append a predicted bounding box for a frame to a CSV file in `output_dir`.
+
+    CSV columns: frame,x,y,w,h
+    Box is expected as (x, y, w, h) or (r, c, w, h) where x/r is left and y/c is top.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    file_path = os.path.join(output_dir, preds_file)
+    write_header = not os.path.exists(file_path)
+    x, y, w, h = box
+    with open(file_path, 'a', newline='') as f:
+        writer = csv.writer(f)
+        if write_header:
+            writer.writerow(['frame', 'x', 'y', 'w', 'h'])
+        writer.writerow([int(frame_number), int(x), int(y), int(w), int(h)])
+    return file_path
+
+
+def save_meta(output_dir, frames, total_time, meta_file='meta.json'):
+    """Save simple metadata (frames processed and total processing time)."""
+    os.makedirs(output_dir, exist_ok=True)
+    meta = {'frames': int(frames), 'total_time': float(total_time)}
+    file_path = os.path.join(output_dir, meta_file)
+    with open(file_path, 'w') as f:
+        json.dump(meta, f)
+    return file_path

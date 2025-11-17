@@ -44,28 +44,22 @@ class CNNFeatureExtractor:
         Args:
             model_name: 'resnet50' or 'vgg16'
             device: 'cpu' or 'cuda'
-        
-        Note:
-            使用 ImageNet 预训练模型（Transfer Learning）
-            - pretrained=True: 自动下载 ImageNet 训练好的权重
-            - 不需要重新训练：直接提取特征用于跟踪
-            - eval() 模式：冻结参数，只做前向传播
         """
         self.device = device
         self.model_name = model_name
         
-        # Load pre-trained model (使用 ImageNet 预训练权重)
+        # Load pre-trained model 
         if model_name == 'resnet50':
-            self.model = models.resnet50(pretrained=True)  # ← ImageNet 预训练
+            self.model = models.resnet50(pretrained=True)  # ← ImageNet pre-trained
             self.layers_info = self._get_resnet_layers()
         elif model_name == 'vgg16':
-            self.model = models.vgg16(pretrained=True)     # ← ImageNet 预训练
+            self.model = models.vgg16(pretrained=True)     # ← ImageNet pre-trained
             self.layers_info = self._get_vgg_layers()
         else:
             raise ValueError(f"Unsupported model: {model_name}")
         
         self.model.to(device)
-        self.model.eval()  # 评估模式：不训练，不更新权重
+        self.model.eval() 
         
         # Image preprocessing
         self.transform = transforms.Compose([
@@ -81,40 +75,64 @@ class CNNFeatureExtractor:
         self.hooks = []
     
     def _get_resnet_layers(self) -> List[FeatureLayerInfo]:
-        """
-        Define ResNet-50 layers for feature extraction.
-        
-        Layer selection criteria:
-        - conv1: Low-level (edges, textures), RF=7x7
-        - layer1: Low-level, RF=35x35
-        - layer2: Mid-level (parts), RF=91x91
-        - layer3: Mid-level (object parts), RF=267x267
-        - layer4: High-level (whole object), RF=427x427
-        """
         return [
+            # 保留原有的
             FeatureLayerInfo('conv1', 0, (64, 56, 56), 7, 'low'),
             FeatureLayerInfo('layer1', 1, (256, 56, 56), 35, 'low'),
-            FeatureLayerInfo('layer2', 2, (512, 28, 28), 91, 'mid'),
-            FeatureLayerInfo('layer3', 3, (1024, 14, 14), 267, 'mid'),
+            
+            # 细分layer2 - 测试不同深度
+            FeatureLayerInfo('layer2.0', 2, (512, 28, 28), 51, 'mid_early'),
+            FeatureLayerInfo('layer2.2', 2, (512, 28, 28), 71, 'mid'),
+            FeatureLayerInfo('layer2', 2, (512, 28, 28), 91, 'mid_late'),
+            
+            # 细分layer3
+            FeatureLayerInfo('layer3.0', 3, (1024, 14, 14), 147, 'mid_high'),
+            FeatureLayerInfo('layer3.3', 3, (1024, 14, 14), 207, 'high_early'),
+            FeatureLayerInfo('layer3', 3, (1024, 14, 14), 267, 'high'),
+            
             FeatureLayerInfo('layer4', 4, (2048, 7, 7), 427, 'high'),
         ]
     
     def _get_vgg_layers(self) -> List[FeatureLayerInfo]:
-        """Define VGG-16 layers for feature extraction."""
+        """Define VGG-16 layers for feature extraction with more granularity."""
         return [
-            FeatureLayerInfo('conv1_2', 3, (64, 224, 224), 4, 'low'),
-            FeatureLayerInfo('conv2_2', 8, (128, 112, 112), 10, 'low'),
-            FeatureLayerInfo('conv3_3', 15, (256, 56, 56), 24, 'mid'),
-            FeatureLayerInfo('conv4_3', 22, (512, 28, 28), 52, 'mid'),
-            FeatureLayerInfo('conv5_3', 29, (512, 14, 14), 116, 'high'),
+            # Block 1 - 低级特征（边缘、颜色）
+            FeatureLayerInfo('conv1_1', 0, (64, 224, 224), 3, 'low'),
+            FeatureLayerInfo('conv1_2', 2, (64, 224, 224), 4, 'low'),
+            
+            # Block 2 - 纹理特征
+            FeatureLayerInfo('conv2_1', 5, (128, 112, 112), 8, 'low'),
+            FeatureLayerInfo('conv2_2', 7, (128, 112, 112), 10, 'low_mid'),
+            
+            # Block 3 - 局部形状特征
+            FeatureLayerInfo('conv3_1', 10, (256, 56, 56), 16, 'mid_early'),
+            FeatureLayerInfo('conv3_2', 12, (256, 56, 56), 20, 'mid'),
+            FeatureLayerInfo('conv3_3', 14, (256, 56, 56), 24, 'mid'),
+            
+            # Block 4 - 复杂形状和部件
+            FeatureLayerInfo('conv4_1', 17, (512, 28, 28), 36, 'mid_high'),
+            FeatureLayerInfo('conv4_2', 19, (512, 28, 28), 44, 'mid_high'),
+            FeatureLayerInfo('conv4_3', 21, (512, 28, 28), 52, 'high'),
+            
+            # Block 5 - 高级语义特征
+            FeatureLayerInfo('conv5_1', 24, (512, 14, 14), 84, 'high'),
+            FeatureLayerInfo('conv5_2', 26, (512, 14, 14), 100, 'high'),
+            FeatureLayerInfo('conv5_3', 28, (512, 14, 14), 116, 'high'),
         ]
-    
+        
     def register_hooks(self, layer_name: str):
         """Register forward hook to extract features from specific layer."""
         self.remove_hooks()
         
         if self.model_name == 'resnet50':
-            target_layer = getattr(self.model, layer_name)
+            # Support nested layer names like 'layer3.0'
+            parts = layer_name.split('.')
+            target_layer = self.model
+            for part in parts:
+                if part.isdigit():
+                    target_layer = target_layer[int(part)]
+                else:
+                    target_layer = getattr(target_layer, part)
         elif self.model_name == 'vgg16':
             # VGG uses sequential features
             layer_idx = next(l.layer_index for l in self.layers_info if l.layer_name == layer_name)
@@ -126,13 +144,96 @@ class CNNFeatureExtractor:
         hook = target_layer.register_forward_hook(hook_fn)
         self.hooks.append(hook)
     
+    def select_best_channels(self, features: torch.Tensor, roi: Tuple[int, int, int, int], 
+                        method: str = 'discrimination', top_k: int = 64,
+                        frame_shape: Tuple[int, int] = None) -> List[int]:
+        """Select channels that are discriminative for target vs background."""
+        C, H, W = features.shape
+        x, y, w, h = roi
+        
+        # Map coordinates
+        if frame_shape is not None:
+            frame_h, frame_w = frame_shape
+            x = int(x * W / frame_w)
+            y = int(y * H / frame_h)
+            w = int(w * W / frame_w)
+            h = int(h * H / frame_h)
+        
+        x = max(0, min(x, W - 1))
+        y = max(0, min(y, H - 1))
+        w = max(1, min(w, W - x))
+        h = max(1, min(h, H - y))
+        
+        # Extract target region
+        target_region = features[:, y:y+h, x:x+w]
+        target_mean = target_region.mean(dim=(1, 2))
+        target_std = target_region.std(dim=(1, 2))
+        
+        # Extract multiple background regions (more robust!)
+        bg_regions = []
+        
+        # Top region
+        if y > h:
+            bg_regions.append(features[:, max(0, y-h):y, x:x+w])
+        
+        # Bottom region  
+        if y + h + h < H:
+            bg_regions.append(features[:, y+h:min(H, y+2*h), x:x+w])
+        
+        # Left region
+        if x > w:
+            bg_regions.append(features[:, y:y+h, max(0, x-w):x])
+        
+        # Right region
+        if x + w + w < W:
+            bg_regions.append(features[:, y:y+h, x+w:min(W, x+2*w)])
+        
+        # Combine background statistics
+        if bg_regions:
+            bg_mean = torch.stack([r.mean(dim=(1, 2)) for r in bg_regions]).mean(dim=0)
+            bg_std = torch.stack([r.std(dim=(1, 2)) for r in bg_regions]).mean(dim=0)
+        else:
+            # Fallback: use entire image
+            mask = torch.ones_like(features[0], dtype=torch.bool)
+            mask[y:y+h, x:x+w] = False
+            bg_mean = features[:, mask].mean(dim=1)
+            bg_std = features[:, mask].std(dim=1)
+        
+        if method == 'discrimination':
+            # Signal-to-Noise Ratio with variance consideration
+            # Strong response in target, weak response in background
+            signal = target_mean
+            noise = bg_mean + bg_std  # Background mean + variation
+            
+            snr = signal / (noise + 1e-6)
+            top_channels = torch.topk(snr, k=min(top_k, C)).indices
+            
+        elif method == 'contrast':
+            # Maximum contrast between target and background
+            contrast = (target_mean - bg_mean).abs() / (target_std + bg_std + 1e-6)
+            top_channels = torch.topk(contrast, k=min(top_k, C)).indices
+            
+        elif method == 'fisher':
+            # Fisher discriminant ratio: between-class variance / within-class variance
+            between_class = (target_mean - bg_mean).pow(2)
+            within_class = target_std.pow(2) + bg_std.pow(2)
+            fisher_score = between_class / (within_class + 1e-6)
+            top_channels = torch.topk(fisher_score, k=min(top_k, C)).indices
+            
+        else:
+            # Fallback: simple discrimination
+            discrimination = (target_mean - bg_mean).abs()
+            top_channels = torch.topk(discrimination, k=min(top_k, C)).indices
+        
+        return top_channels.cpu().tolist()
+
     def remove_hooks(self):
-        """Remove all registered hooks."""
-        for hook in self.hooks:
-            hook.remove()
-        self.hooks = []
-        self.features = {}
-    
+            """Remove all registered hooks."""
+            for hook in self.hooks:
+                hook.remove()
+            self.hooks = []
+            self.features = {}
+        
     def extract_features(self, frame: np.ndarray, roi: Optional[Tuple[int, int, int, int]] = None) -> torch.Tensor:
         """
         Extract CNN features from frame.
@@ -163,129 +264,6 @@ class CNNFeatureExtractor:
         
         return features
     
-    def select_best_layer(self, object_size: Tuple[int, int]) -> str:
-        """
-        Select best layer based on object size.
-        
-        Rule of thumb:
-        - Small objects (< 64x64): Use mid-level layers (layer2/conv3_3)
-        - Medium objects (64-128): Use mid-level layers (layer2/layer3)
-        - Large objects (> 128): Use high-level layers (layer3/layer4)
-        
-        Args:
-            object_size: (width, height) of tracking object
-        
-        Returns:
-            layer_name: Best layer name
-        """
-        w, h = object_size
-        size = max(w, h)
-        
-        if self.model_name == 'resnet50':
-            if size < 64:
-                return 'layer2'  # RF=91, good for small objects
-            elif size < 128:
-                return 'layer3'  # RF=267, good for medium objects
-            else:
-                return 'layer3'  # Still layer3, layer4 too abstract
-        else:  # vgg16
-            if size < 64:
-                return 'conv3_3'
-            elif size < 128:
-                return 'conv4_3'
-            else:
-                return 'conv4_3'
-    
-    def select_best_channels(self, features: torch.Tensor, roi: Tuple[int, int, int, int], 
-                           method='variance', top_k=64, frame_shape=None) -> List[int]:
-        """
-        Select best channels from feature map.
-        
-        Args:
-            features: (C, H, W) feature map
-            roi: (x, y, w, h) region of interest in image space
-            method: Channel selection method
-            top_k: Number of channels to select
-            frame_shape: (height, width) of original frame
-        
-        Returns:
-            channel_indices: List of selected channel indices
-        """
-        C, H, W = features.shape
-        
-        # Default frame shape
-        if frame_shape is None:
-            frame_h, frame_w = 224, 224
-        else:
-            frame_h, frame_w = frame_shape
-        
-        # Map ROI from image space (x,y,w,h) to feature space
-        scale_h = H / frame_h
-        scale_w = W / frame_w
-        x, y, w, h = roi
-        # x->col, y->row
-        x_feat = int(x * scale_w)
-        y_feat = int(y * scale_h)
-        w_feat = max(1, int(w * scale_w))
-        h_feat = max(1, int(h * scale_h))
-        
-        # Clamp to feature map bounds
-        x_feat = max(0, min(W - w_feat, x_feat))
-        y_feat = max(0, min(H - h_feat, y_feat))
-        
-        # Extract ROI features [C, H, W] -> [C, h, w]
-        roi_features = features[:, y_feat:y_feat+h_feat, x_feat:x_feat+w_feat]
-        
-        if method == 'variance':
-            # Improved: Consider both variance within ROI and contrast with background
-            roi_flat = roi_features.reshape(C, -1)
-            roi_var = roi_flat.var(dim=1)  # Variance within ROI
-            roi_mean = roi_flat.mean(dim=1)  # Mean of ROI
-            
-            # Sample background (expand ROI by 50% on each side)
-            bg_x1 = max(0, x_feat - w_feat // 4)
-            bg_y1 = max(0, y_feat - h_feat // 4)
-            bg_x2 = min(W, x_feat + w_feat + w_feat // 4)
-            bg_y2 = min(H, y_feat + h_feat + h_feat // 4)
-            
-            # Create mask for background (exclude ROI)
-            mask = torch.ones((H, W), dtype=torch.bool, device=features.device)
-            mask[y_feat:y_feat+h_feat, x_feat:x_feat+w_feat] = False
-            
-            # Get background features
-            bg_features = features[:, bg_y1:bg_y2, bg_x1:bg_x2]
-            bg_mask = mask[bg_y1:bg_y2, bg_x1:bg_x2]
-            bg_flat = bg_features.reshape(C, -1)[:, bg_mask.reshape(-1)]
-            bg_mean = bg_flat.mean(dim=1) if bg_flat.numel() > 0 else roi_mean
-            
-            # Contrast: absolute difference between ROI and background
-            contrast = torch.abs(roi_mean - bg_mean)
-            
-            # Combined score: variance + contrast (both normalized)
-            roi_var_norm = roi_var / (roi_var.max() + 1e-6)
-            contrast_norm = contrast / (contrast.max() + 1e-6)
-            channel_scores = (0.5 * roi_var_norm + 0.5 * contrast_norm).cpu().numpy()
-        
-        elif method == 'max_response':
-            # High activation = strong response to object
-            channel_scores = roi_features.reshape(C, -1).max(dim=1)[0].cpu().numpy()
-        
-        elif method == 'gradients':
-            # Strong gradients = edges and structure
-            roi_np = roi_features.cpu().numpy()
-            channel_scores = np.zeros(C)
-            for i in range(C):
-                gx = cv2.Sobel(roi_np[i], cv2.CV_32F, 1, 0, ksize=3)
-                gy = cv2.Sobel(roi_np[i], cv2.CV_32F, 0, 1, ksize=3)
-                grad_mag = np.sqrt(gx**2 + gy**2)
-                channel_scores[i] = grad_mag.mean()
-        
-        else:
-            raise ValueError(f"Unknown method: {method}")
-        
-        # Select top-k channels
-        top_indices = np.argsort(channel_scores)[-top_k:][::-1]
-        return top_indices.tolist()
 
 
 class DeepMeanShiftTracker:
@@ -550,7 +528,10 @@ class DeepTracker:
 
         frame_count = 1
         show_backproj = visualize_backproj
+        import time
+        from .utils import save_frame, save_prediction, save_meta
         
+        start_time = time.time()
         if save_result:
             import os
             os.makedirs(output_dir, exist_ok=True)
@@ -586,16 +567,22 @@ class DeepTracker:
                     cv2.imshow('Backprojection (press b to toggle)', combined)
 
             if save_result:
-                from .utils import save_frame
                 save_frame(frame_with_box, frame_count, output_dir)
+                try:
+                    save_prediction(output_dir, frame_count, new_window)
+                except Exception:
+                    pass
 
             key = cv2.waitKey(60) & 0xFF
             if key == 27:
                 print("\nTracking stopped by user")
                 break
             elif key == ord('s'):
-                from .utils import save_frame
                 save_frame(frame_with_box, frame_count, output_dir)
+                try:
+                    save_prediction(output_dir, frame_count, new_window)
+                except Exception:
+                    pass
                 print(f"Saved frame {frame_count}")
             elif key == ord('b'):
                 show_backproj = not show_backproj
@@ -606,7 +593,27 @@ class DeepTracker:
         cap.release()
         cv2.destroyAllWindows()
         cv2.waitKey(1)
-        print(f"\n✅ Tracking completed. Total frames: {frame_count}")
+        total_time = time.time() - start_time
+        frames_processed = max(0, frame_count - 1)
         if save_result:
+            try:
+                save_meta(output_dir, frames_processed, total_time)
+            except Exception:
+                pass
             print(f"   Output directory: {output_dir}")
+        print(f"\n✅ Tracking completed. Total frames: {frames_processed}")
         print("=" * 60)
+        # Clean up any registered hooks in the feature extractor to avoid
+        # accumulating forward hooks between runs (which can cause memory
+        # leaks or duplicated outputs). Also clear CUDA cache if available.
+        try:
+            self.tracker.extractor.remove_hooks()
+        except Exception:
+            pass
+
+        try:
+            import torch
+            if hasattr(torch, 'cuda') and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+        except Exception:
+            pass

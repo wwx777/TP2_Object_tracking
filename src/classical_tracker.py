@@ -485,7 +485,8 @@ class ClassicalTracker:
 
 
         from .features import extract_color_histogram, compute_backprojection, visualize_hue_and_backprojection
-        from .utils import visualize_tracking, save_frame
+        from .utils import visualize_tracking, save_frame, save_prediction, save_meta
+        import time
         from .features import compute_gradients, visualize_gradients, visualize_gradient_magnitude
 
         self.strategy = self._build_strategy(method, kwargs,
@@ -582,62 +583,70 @@ class ClassicalTracker:
         print("Press 's' to save frame, 'ESC' to exit")
 
         frame_count = 1
+        start_time = time.time()
         while True:
             ret, frame = cap.read()
             if not ret:
                 break
+            # Ensure a default annotated frame exists to avoid UnboundLocalError
+            frame_with_box = frame.copy()
 
             new_window = self.update(frame)
 
             # 梯度側掛：一行接入，可隨時關
             self.grad_sidecar(self.state, frame, frame_count)
 
-            if visualize:
-                frame_with_box = self.visualize_tracking(
-                    frame, new_window, window_name='Tracking Result',
-                    color=(255, 0, 0), thickness=2
-                )
-                
-                # 根据不同方法使用不同的可视化
-                if visualize_process:
-                    if isinstance(self.strategy, MeanShiftStrategy):
-                        # Mean-shift: 显示Hue和反向投影
-                        self.visualize_hue_and_backprojection(
-                            frame, self.state.model, new_window,
-                            save_dir=output_dir if save_result else None,
-                            frame_num=frame_count
-                        )
-                    elif isinstance(self.strategy, HoughTransformStrategy):
-                        # Q3: 梯度四宫格可视化
-                        from .features import render_gradient_quadrants, compute_gradients
-                        orientations, magnitudes, mask = compute_gradients(frame, threshold=self.strategy.gradient_threshold)
-                        
-                        gradient_save_path = None
+            # Always prepare an annotated frame for saving even if not visualizing
+            frame_with_box = self.visualize_tracking(
+                frame, new_window,
+                window_name='Tracking Result' if visualize else None,
+                color=(255, 0, 0), thickness=2
+            )
+
+            # 根据不同方法使用不同的可视化（仅在需要展示过程时打开窗口）
+            if visualize_process:
+                if isinstance(self.strategy, MeanShiftStrategy):
+                    # Mean-shift: 显示Hue和反向投影
+                    self.visualize_hue_and_backprojection(
+                        frame, self.state.model, new_window,
+                        save_dir=output_dir if save_result else None,
+                        frame_num=frame_count
+                    )
+                elif isinstance(self.strategy, HoughTransformStrategy):
+                    # Q3: 梯度四宫格可视化
+                    from .features import render_gradient_quadrants, compute_gradients
+                    orientations, magnitudes, mask = compute_gradients(frame, threshold=self.strategy.gradient_threshold)
+                    
+                    gradient_save_path = None
+                    if save_result:
+                        import os
+                        os.makedirs(output_dir, exist_ok=True)
+                        gradient_save_path = f"{output_dir}/gradient_quadrants_{frame_count:04d}.png"
+                    
+                    # 渲染并显示四宫格
+                    panel = render_gradient_quadrants(frame, orientations, magnitudes, mask, gradient_save_path)
+                    cv2.imshow('Q3: Gradient Analysis', panel)
+                    
+                    # Q4: Hough Transform 累加器可视化
+                    from .features import visualize_hough_transform
+                    if self.state.hough_accumulator is not None and self.state.search_region is not None:
+                        hough_save_path = None
                         if save_result:
-                            import os
-                            os.makedirs(output_dir, exist_ok=True)
-                            gradient_save_path = f"{output_dir}/gradient_quadrants_{frame_count:04d}.png"
+                            hough_save_path = f"{output_dir}/hough_transform_{frame_count:04d}.png"
                         
-                        # 渲染并显示四宫格
-                        panel = render_gradient_quadrants(frame, orientations, magnitudes, mask, gradient_save_path)
-                        cv2.imshow('Q3: Gradient Analysis', panel)
-                        
-                        # Q4: Hough Transform 累加器可视化
-                        from .features import visualize_hough_transform
-                        if self.state.hough_accumulator is not None and self.state.search_region is not None:
-                            hough_save_path = None
-                            if save_result:
-                                hough_save_path = f"{output_dir}/hough_transform_{frame_count:04d}.png"
-                            
-                            hough_vis = visualize_hough_transform(
-                                frame, self.state.hough_accumulator, 
-                                self.state.search_region, new_window,
-                                hough_save_path
-                            )
-                            cv2.imshow('Q4: Hough Transform H(x)', hough_vis)
+                        hough_vis = visualize_hough_transform(
+                            frame, self.state.hough_accumulator, 
+                            self.state.search_region, new_window,
+                            hough_save_path
+                        )
+                        cv2.imshow('Q4: Hough Transform H(x)', hough_vis)
 
             if save_result:
                 self.save_frame(frame_with_box, frame_count, output_dir)
+                try:
+                    save_prediction(output_dir, frame_count, new_window)
+                except Exception:
+                    pass
 
             key = cv2.waitKey(60) & 0xFF
             if key == 27:
@@ -652,4 +661,12 @@ class ClassicalTracker:
         cap.release()
         cv2.destroyAllWindows()
         cv2.waitKey(1)
-        print(f"\n✅ Tracking completed. Total frames: {frame_count}")
+        total_time = time.time() - start_time
+        frames_processed = max(0, frame_count - 1)
+        if self.save_result:
+            try:
+                save_meta(self.output_dir, frames_processed, total_time)
+            except Exception:
+                pass
+
+        print(f"\n✅ Tracking completed. Total frames: {frames_processed}")

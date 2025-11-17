@@ -203,37 +203,47 @@ class SiameseTracker:
 
     def track_video(self, visualize=True, save_result=False, output_dir='results/siamfc'):
         cap = cv2.VideoCapture(self.video_path)
-        ret, frame = cap.read()
-        if not ret:
-            print('Cannot read video')
-            return
-
-        roi = self.select_roi(frame)
-        self.initialize(frame, roi)
-
-        if save_result:
-            os.makedirs(output_dir, exist_ok=True)
-
-        frame_idx = 1
-        while True:
+        try:
             ret, frame = cap.read()
             if not ret:
-                break
-            bbox = self.update(frame)
-            # draw
-            x, y, w, h = bbox
-            out = frame.copy()
-            cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            if visualize:
-                cv2.imshow('SiamFC Tracker', out)
+                print('Cannot read video')
+                return
+
+            roi = self.select_roi(frame)
+            self.initialize(frame, roi)
+
             if save_result:
-                from .utils import save_frame
-                save_frame(out, frame_idx, output_dir)
+                os.makedirs(output_dir, exist_ok=True)
 
-            key = cv2.waitKey(30) & 0xFF
-            if key == 27:
-                break
-            frame_idx += 1
+            frame_idx = 1
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                bbox = self.update(frame)
+                # draw
+                x, y, w, h = bbox
+                out = frame.copy()
+                cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                if visualize:
+                    cv2.imshow('SiamFC Tracker', out)
+                if save_result:
+                    from .utils import save_frame
+                    save_frame(out, frame_idx, output_dir)
 
-        cap.release()
-        cv2.destroyAllWindows()
+                key = cv2.waitKey(30) & 0xFF
+                if key == 27:
+                    break
+                frame_idx += 1
+        finally:
+            # Ensure resources are always released even on exceptions
+            try:
+                cap.release()
+            except Exception:
+                pass
+            cv2.destroyAllWindows()
+            # Process pending GUI events to avoid leftover windows
+            try:
+                cv2.waitKey(1)
+            except Exception:
+                pass
