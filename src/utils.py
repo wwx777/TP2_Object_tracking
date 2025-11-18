@@ -90,8 +90,20 @@ def visualize_tracking(frame, track_window, window_name='Tracking',
     Args:
         window_name: If None, don't show window (for save-only mode)
     """
-    r, c, w, h = track_window
+    # Ensure coordinates are integers (cv2 expects integer pixel indices)
+    try:
+        r, c, w, h = track_window
+    except Exception:
+        # Unexpected format, return original frame
+        return frame
+    r, c, w, h = int(round(r)), int(round(c)), int(round(w)), int(round(h))
     frame_with_box = frame.copy()
+    # Clip coordinates to frame bounds
+    h_frame, w_frame = frame_with_box.shape[:2]
+    r = max(0, min(r, w_frame - 1))
+    c = max(0, min(c, h_frame - 1))
+    w = max(0, min(w, w_frame - r))
+    h = max(0, min(h, h_frame - c))
     cv2.rectangle(frame_with_box, (r, c), (r + w, c + h), color, thickness)
     
     if window_name is not None:
