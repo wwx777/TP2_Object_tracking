@@ -66,13 +66,13 @@ PY
 2) 用关键帧列表启动标注器（只在这些帧显示并让你标注）
 
 ```bash
-python scripts/annotate_video.py --video Test-Videos/Antoine_Mug.mp4 --output results/gt_mug --frames-file results/gt_mug/keyframes.txt
+python scripts/annotate_video.py --video Test-Videos/Antoine_Mug.mp4 --out_dir results/gt_mug --frames-file results/gt_mug/keyframes.txt
 ```
 
 3) 插值生成逐帧 GT（线性插值）
 
 ```bash
-python scripts/interpolate_gt.py --keyframes results/gt_mug/keyframes.txt --annotations results/gt_mug/annotations.csv --out results/gt_mug/gt.csv
+python scripts/interpolate_gt.py --keyframes results/gt_mug/keyframes.txt --annotations results/gt_mug/annotations.csv --out_dir results/gt_mug/gt.csv
 ```
 
 说明：

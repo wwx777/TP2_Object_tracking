@@ -184,10 +184,18 @@ class SiameseTracker:
             print("\nInitializing real Siamese network...")
             self.initialize(frame, roi)
             
-            # 创建输出目录
+            # 创建输出目录并准备保存工具
             if save_result:
                 os.makedirs(output_dir, exist_ok=True)
                 print(f"Results will be saved to: {output_dir}")
+                # 延迟导入以避免模块导入时的相对路径问题
+                try:
+                    from .utils import save_frame, save_prediction, save_meta
+                except Exception:
+                    # 如果作为脚本直接运行，尝试非相对导入
+                    from utils import save_frame, save_prediction, save_meta
+                import time
+                total_start_time = time.time()
             
             frame_idx = 1
             fps_list = []
@@ -240,6 +248,11 @@ class SiameseTracker:
                 if save_result:
                     filename = f'frame_{frame_idx:04d}.jpg'
                     cv2.imwrite(os.path.join(output_dir, filename), out)
+                    try:
+                        # 追加保存预测到 CSV（columns: frame,x,y,w,h）
+                        save_prediction(output_dir, frame_idx, (x, y, w, h))
+                    except Exception as e:
+                        print(f"Failed to save prediction for frame {frame_idx}: {e}")
                 
                 # 键盘控制
                 key = cv2.waitKey(1) & 0xFF
@@ -259,9 +272,15 @@ class SiameseTracker:
             print("\n" + "="*60)
             print("✅ Tracking Completed!")
             print("="*60)
-            print(f"Total frames processed: {frame_idx}")
+            frames_processed = max(0, frame_idx - 1)
+            print(f"Total frames processed: {frames_processed}")
             print(f"Average FPS: {np.mean(fps_list):.1f}")
             if save_result:
+                try:
+                    total_time = time.time() - total_start_time
+                    save_meta(output_dir, frames_processed, total_time)
+                except Exception:
+                    pass
                 print(f"Results saved to: {output_dir}")
             print("="*60 + "\n")
         

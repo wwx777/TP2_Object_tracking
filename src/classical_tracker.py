@@ -615,9 +615,16 @@ class ClassicalTracker:
             if visualize_process:
                 if isinstance(self.strategy, MeanShiftStrategy):
                     # Mean-shift: 显示Hue和反向投影
+                    # When `visualize_process` is enabled we also want to save
+                    # the Hue/backprojection visualization for debugging. Save
+                    # into a `process/` subfolder under `output_dir`.
+                    import os
+                    proc_dir = os.path.join(output_dir, 'process')
+                    os.makedirs(proc_dir, exist_ok=True)
+
                     self.visualize_hue_and_backprojection(
                         frame, self.state.model, new_window,
-                        save_dir=output_dir if save_result else None,
+                        save_dir=proc_dir,
                         frame_num=frame_count
                     )
                 elif isinstance(self.strategy, HoughTransformStrategy):

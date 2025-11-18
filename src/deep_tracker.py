@@ -319,6 +319,37 @@ class DeepTracker:
         return new_window
 
     # ----------------------------------------------------------------------
+    # 公开方法：计算整张图像的 similarity map（归一化到 [0,1]，float32）
+    # ----------------------------------------------------------------------
+    def compute_similarity_map(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Compute the similarity backprojection (same shape as input image HxW),
+        normalized to [0,1] float32. Requires `initialize` has been called
+        to build `self.state.template` and `self.state.selected_channels`.
+        """
+        if self.state.template is None or self.state.selected_channels is None:
+            raise RuntimeError("DeepTracker: template not initialized. Call initialize() first.")
+
+        H, W = frame.shape[:2]
+        feat = self._extract_features(frame)
+
+        sim_f = self._compute_similarity_map(
+            feat,
+            self.state.template,
+            self.state.template_norm,
+            self.state.selected_channels,
+        )  # [Hf,Wf], torch.Tensor on device
+
+        sim_img = self._resize_sim_to_image(sim_f, img_size=(H, W))  # numpy HxW float32
+
+        # normalize to [0,1]
+        mn, mx = sim_img.min(), sim_img.max()
+        if mx - mn < 1e-6:
+            return np.zeros_like(sim_img, dtype=np.float32)
+        sim_norm = (sim_img - mn) / (mx - mn)
+        return sim_norm.astype(np.float32)
+
+    # ----------------------------------------------------------------------
     # 主入口：整段视频跟踪
     # ----------------------------------------------------------------------
     def track_video(
