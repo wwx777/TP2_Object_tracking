@@ -1,14 +1,16 @@
 # src/ostrack.py
 """
-Real OSTrack wrapper for your classical-tracking project.
+Thin wrapper around the official OSTrack demo code.
 
-Directory assumption:
-    project_root/
+Directory layout assumed:
+
+    object_tracking/
         src/
             ostrack.py        # this file
-        OSTrack/              # official botaoye/OSTrack repo (git clone)
+        OSTrack/              # git clone https://github.com/botaoye/OSTrack
 
 Usage in notebook:
+
     import sys
     sys.path.append('..')
     from src.ostrack import OSTrack
@@ -17,11 +19,17 @@ Usage in notebook:
 
     tracker = OSTrack(
         video_path=VIDEO,
-        config_name='vitb_256_mae_ce_32x4_ep300',  # or vitb_384_...
-        device='cuda:0',                           # or 'cpu'
-        debug=False
+        config_name='vitb_256_mae_ce_32x4_ep300',  # 对应 experiments/ostrack/ 下的 yaml
+        device='cpu',                               # 或 'cuda:0'
+        debug=True
     )
-    tracker.track_video(visualize=True, save_result=False)
+
+    tracker.track_video(
+        use_optional_box=True,     # True: 先选 ROI，然后以该框作为初始 bbox
+        visualize=True,
+        save_result=False,
+        output_dir='../results/qX_ostrack'
+    )
 """
 
 import os
@@ -30,17 +38,14 @@ from typing import Tuple
 
 import cv2
 import numpy as np
-import torch
 import types as _types
 
 # ---------------------------------------------------------------------
-# 0. 兼容旧版 OSTrack 对 torch._six 的依赖（你的 PyTorch 比较新，已经删掉这个模块了）
+# 0. 兼容 OSTrack 代码里对 torch._six 的老依赖
 # ---------------------------------------------------------------------
 try:
-    # 老版本是 from torch._six import string_classes
     from torch._six import string_classes  # type: ignore
 except ModuleNotFoundError:
-    # 手动注入一个假的 torch._six 模块，满足它需要的属性即可
     six_mod = _types.ModuleType("torch._six")
     six_mod.string_classes = (str,)
     six_mod.int_classes = (int,)
@@ -51,161 +56,32 @@ except ModuleNotFoundError:
 # 1. 把官方 OSTrack 仓库加入 sys.path
 # ---------------------------------------------------------------------
 THIS_DIR = os.path.dirname(__file__)
-PROJECT_ROOT = os.path.abspath(os.path.join(THIS_DIR, ".."))     # object_tracking/
-OSTRACK_ROOT = os.path.join(PROJECT_ROOT, "OSTrack")             # object_tracking/OSTrack
+PROJECT_ROOT = os.path.abspath(os.path.join(THIS_DIR, ".."))
+OSTRACK_ROOT = os.path.join(PROJECT_ROOT, "OSTrack")  # 你已经放在和 src 并列了
 
 if OSTRACK_ROOT not in sys.path:
     sys.path.insert(0, OSTRACK_ROOT)
 
-# 现在 import 官方代码（按 tracking/test.py 的方式）
 try:
     from lib.test.evaluation.tracker import Tracker as EvalTracker
     from lib.test.evaluation.environment import env_settings
 except ImportError as e:
     raise ImportError(
-        "Cannot import OSTrack's lib.test.evaluation. "
-        "Please ensure the official OSTrack repo is cloned to project_root/OSTrack "
-        "and that you are running inside the correct environment (依赖都装好，包括 torch 等)."
+        "Cannot import OSTrack's lib.test.evaluation.\n"
+        "请确认：\n"
+        "1) 官方 OSTrack 仓库已克隆到 project_root/OSTrack\n"
+        "2) 当前 conda 环境已经按 OSTrack/install.sh 安装好依赖\n"
+        "3) 已经执行过 python tracking/create_default_local_file.py"
     ) from e
-
-
-class OSTrackTracker:
-    """
-    实际调用预训练 OSTrack 模型的底层 tracker（真正做推理的那层）。
-
-    公共接口：
-        - init(frame, roi)
-        - update(frame) -> (x, y, w, h)
-
-    和你之前占位版本的接口保持一致，只是内部不再是 template matching，
-    而是调用官方的 ViT 模型。
-    """
-
-    def __init__(
-        self,
-        config_name: str = "vitb_256_mae_ce_32x4_ep300",
-        device: str = "cuda",
-        debug: bool = False,
-    ):
-        self.config_name = config_name
-        self.device = device
-        self.debug = debug
-
-        self.current_box: Tuple[int, int, int, int] | None = None
-        self.initialized: bool = False
-
-        # 创建 OSTrack 的环境配置（tracking/create_default_local_file.py 会写这个）
-        env = env_settings()
-
-        # EvalTracker: 根据 name + parameter_name 找对应配置和 checkpoint
-        # name='ostrack' 对应 lib/test/tracker/ostrack.py
-        self.eval_tracker = EvalTracker(
-            name="ostrack",
-            parameter_name=self.config_name,
-            dataset_name="video_demo",   # 占位名称，不用于真实 benchmark
-            run_id="online_demo",
-            env=env,
-        )
-
-        # 真实的单目标 tracker 对象，有 initialize / track 方法
-        self.tracker = self.eval_tracker.tracker
-
-        # 有些实现提供 .to() 方法，可以显式指定 device
-        if hasattr(self.tracker, "to"):
-            try:
-                self.tracker.to(device)
-            except TypeError:
-                # 如果不接受 device 参数，那就用它自己的默认逻辑
-                pass
-
-        if self.debug:
-            print(f"[OSTrack] Loaded tracker with config={self.config_name}, device={self.device}")
-
-    def init(self, frame: np.ndarray, roi: Tuple[int, int, int, int]):
-        """
-        用首帧和初始 bbox 初始化 OSTrack.
-
-        Args:
-            frame: BGR 图像, shape (H, W, 3)
-            roi:   (x, y, w, h) 左上角 + 宽高
-        """
-        if frame is None:
-            raise ValueError("Empty frame passed to OSTrackTracker.init()")
-
-        x, y, w, h = roi
-        H, W = frame.shape[:2]
-
-        # clamp，防越界
-        x = max(0, min(int(x), W - 1))
-        y = max(0, min(int(y), H - 1))
-        w = max(1, min(int(w), W - x))
-        h = max(1, min(int(h), H - y))
-
-        # OSTrack 内部默认用 RGB 图像
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        # info 里传入 init_bbox，和官方 tracker 的 initialize 接口一致
-        init_info = {"init_bbox": [float(x), float(y), float(w), float(h)]}
-
-        self.tracker.initialize(rgb, init_info)
-
-        self.current_box = (x, y, w, h)
-        self.initialized = True
-
-        if self.debug:
-            print(f"[OSTrack] Initialized with bbox={self.current_box}")
-
-    def update(self, frame: np.ndarray) -> Tuple[int, int, int, int]:
-        """
-        在新帧上更新目标位置，返回新的 bbox (x, y, w, h).
-        """
-        if not self.initialized:
-            raise RuntimeError("OSTrackTracker not initialized. Call init() first.")
-
-        if frame is None:
-            if self.debug:
-                print("[OSTrack] Empty frame, returning previous bbox")
-            return self.current_box
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-        info = {}
-        out = self.tracker.track(rgb, info)
-
-        # 常见返回键：'target_bbox' 或 'pred_bbox'
-        if "target_bbox" in out:
-            x, y, w, h = out["target_bbox"]
-        elif "pred_bbox" in out:
-            x, y, w, h = out["pred_bbox"]
-        else:
-            if self.debug:
-                print(f"[OSTrack] Unexpected output keys: {list(out.keys())}, fallback to previous bbox")
-            return self.current_box
-
-        self.current_box = (
-            int(round(x)),
-            int(round(y)),
-            int(round(w)),
-            int(round(h)),
-        )
-
-        if self.debug:
-            print(f"[OSTrack] Updated bbox={self.current_box}")
-
-        return self.current_box
 
 
 class OSTrack:
     """
-    高层接口：负责
-      - 打开视频
-      - 交互式选 ROI
-      - 循环调用 OSTrackTracker.update()
-      - 可选保存结果帧
+    高层接口：直接调用官方 EvalTracker.run_video 做 demo。
 
-    用法（notebook）：
-        tracker = OSTrack(video_path=..., config_name=..., device=..., debug=...)
-        tracker.track_video(visualize=True, save_result=False)
+    和你 notebook 里之前占位版的 API 尽量保持一致：
+        tracker = OSTrack(...)
+        tracker.track_video(...)
     """
 
     def __init__(
@@ -216,153 +92,117 @@ class OSTrack:
         debug: bool = False,
     ):
         self.video_path = video_path
+        self.config_name = config_name
         self.device = device
         self.debug = debug
 
-        self.tracker = OSTrackTracker(
-            config_name=config_name,
-            device=device,
-            debug=debug,
-        )
-        self.initialized: bool = False
+        # env_settings() 主要用来读 local.py；这里调用一下确保其正确
+        _ = env_settings()
 
-    def select_roi(self, frame: np.ndarray):
+        # EvalTracker: 官方评测 / demo 用的高层 Tracker
+        # 注意：run_id 必须是 None 或 int，否则你遇到的那个 AssertionError 就会出现
+        self.eval_tracker = EvalTracker(
+            name="ostrack",
+            parameter_name=self.config_name,
+            dataset_name="video_demo",  # 只是一个标签，对 run_video 不重要
+            run_id=None,
+        )
+
+        if self.debug:
+            print(
+                f"[OSTrack wrapper] Created EvalTracker("
+                f"name='ostrack', param='{self.config_name}', dataset='video_demo')"
+            )
+
+    # ---------------- 高层接口 ----------------
+
+    def _select_roi_on_first_frame(self) -> Tuple[float, float, float, float] | None:
+        """在第一帧上用 OpenCV 交互式选择 ROI."""
+        cap = cv2.VideoCapture(self.video_path)
+        ret, frame = cap.read()
+        cap.release()
+
+        if not ret or frame is None:
+            print("Cannot read first frame for ROI selection.")
+            return None
+
         roi = cv2.selectROI(
-            "Select Target - OSTrack",
+            "Select Target - OSTrack (official)",
             frame,
             fromCenter=False,
             showCrosshair=True,
         )
-        cv2.destroyWindow("Select Target - OSTrack")
-        return roi  # (x, y, w, h)
+        cv2.destroyWindow("Select Target - OSTrack (official)")
 
-    def initialize(self, frame: np.ndarray, roi: Tuple[int, int, int, int]):
-        self.tracker.init(frame, roi)
-        self.initialized = True
+        x, y, w, h = roi
+        if w <= 0 or h <= 0:
+            print("Invalid ROI selected.")
+            return None
 
-    def update(self, frame: np.ndarray) -> Tuple[int, int, int, int]:
-        if not self.initialized:
-            raise RuntimeError("Tracker not initialized. Call initialize() first.")
-        return self.tracker.update(frame)
+        return float(x), float(y), float(w), float(h)
 
     def track_video(
         self,
+        use_optional_box: bool = True,
         visualize: bool = True,
         save_result: bool = False,
         output_dir: str = "results/ostrack",
     ):
         """
-        视频 tracking 主循环。
+        调用官方 EvalTracker.run_video.
 
-        说明：
-        - 不会主动“加速视频”：不跳帧、不倍速，只是按模型推理速度 + waitKey(1) 自然跑。
-        - 如果模型本身很快，你看到的画面可能会比真实帧率快，这是因为算得快，但代码不会故意跳帧。
+        Parameters
+        ----------
+        use_optional_box : bool
+            True  -> 先在第一帧选 ROI，然后把这个 bbox 作为 `optional_box` 传给 OSTrack。
+            False -> 不传 optional_box，完全交给官方代码（有的版本会要求在命令行指定 bbox）。
+        visualize : bool
+            这里只能通过 OSTrack 自己的可视化控制。大部分版本 run_video()
+            总是开一个窗口显示跟踪结果，没有额外开关。
+        save_result : bool
+            是否让 OSTrack 把结果存到它自己的 tracking_results 目录下。
+            注意：官方 video_demo.py 一般是通过 argparse 的参数控制保存路径，
+            这里我们只能尽量模拟。
+        output_dir : str
+            仅当 save_result=True 时有意义。具体路径由 OSTrack 的环境设置决定，
+            这里只是给一个提示，真正的结果目录还是看 lib/test/evaluation/local.py
         """
-        cap = cv2.VideoCapture(self.video_path)
-        if not cap.isOpened():
-            raise RuntimeError(f"Cannot open video: {self.video_path}")
 
+        # 1) 选 ROI（如果需要）
+        if use_optional_box:
+            optional_box = self._select_roi_on_first_frame()
+            if optional_box is None:
+                print("No valid ROI, aborting.")
+                return
+            if self.debug:
+                print(f"[OSTrack wrapper] Using optional_box = {optional_box}")
+        else:
+            optional_box = None
+            if self.debug:
+                print("[OSTrack wrapper] Running without optional_box")
+
+        # 2) 调用官方的 run_video
+        # 官方 Tracker.run_video 的常见签名是：
+        #     run_video(video: str, optional_box: list = None, save_results: bool = False)
+        # 有的版本还会有 debug/vis 等参数，但我们只传最基本的几个，保证兼容性。
         try:
-            ret, frame = cap.read()
-            if not ret:
-                print("Cannot read first frame")
-                return
+            # 注意：这里不做任何“加速视频”的处理，只是单纯调用 OSTrack 的原始逻辑
+            self.eval_tracker.run_video(
+                self.video_path,
+                optional_box=list(optional_box) if optional_box is not None else None,
+                save_results=bool(save_result),
+            )
+        except TypeError as e:
+            # 万一当前版本的 run_video 参数名稍微不一样，就走一个保底调用
+            if self.debug:
+                print(f"[OSTrack wrapper] run_video signature mismatch: {e}")
+                print("[OSTrack wrapper] Retrying with positional arguments only.")
+            if optional_box is not None:
+                self.eval_tracker.run_video(self.video_path, list(optional_box))
+            else:
+                self.eval_tracker.run_video(self.video_path)
 
-            # 选 ROI 并初始化
-            roi = self.select_roi(frame)
-            if roi[2] == 0 or roi[3] == 0:
-                print("Invalid ROI selected")
-                return
-
-            print("\nInitializing OSTrack...")
-            self.initialize(frame, roi)
-
-            if save_result:
-                os.makedirs(output_dir, exist_ok=True)
-
-            frame_idx = 1
-            fps_list = []
-
-            print("Press ESC to quit | Press 'p' to pause")
-
-            while True:
-                start = cv2.getTickCount()
-                ret, frame = cap.read()
-                if not ret:
-                    break
-
-                bbox = self.update(frame)
-                x, y, w, h = bbox
-
-                out = frame.copy()
-                cv2.rectangle(out, (x, y), (x + w, y + h), (255, 0, 0), 2)
-
-                end = cv2.getTickCount()
-                # 单纯计算本次循环的 FPS，不做任何帧选择操作
-                delta = max(end - start, 1)
-                fps = cv2.getTickFrequency() / delta
-                fps_list.append(fps)
-                avg_fps = float(np.mean(fps_list[-30:])) if fps_list else 0.0
-
-                cv2.putText(
-                    out,
-                    "OSTrack",
-                    (10, 30),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 0, 255),
-                    2,
-                )
-                cv2.putText(
-                    out,
-                    f"Frame: {frame_idx}",
-                    (10, 60),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2,
-                )
-                cv2.putText(
-                    out,
-                    f"FPS: {avg_fps:.1f}",
-                    (10, 90),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 255, 0),
-                    2,
-                )
-
-                if visualize:
-                    cv2.imshow("OSTrack", out)
-
-                if save_result:
-                    filename = f"frame_{frame_idx:04d}.jpg"
-                    cv2.imwrite(os.path.join(output_dir, filename), out)
-
-                # 不刻意加速；这一步只负责响应键盘
-                key = cv2.waitKey(1) & 0xFF
-                if key == 27:
-                    print("\nTracking interrupted by user")
-                    break
-                elif key == ord("p"):
-                    print("\nPaused. Press any key to continue...")
-                    cv2.waitKey(0)
-
-                frame_idx += 1
-
-            print("\nTracking completed")
-            if fps_list:
-                print(f"Average FPS: {np.mean(fps_list):.1f}")
-        finally:
-            try:
-                cap.release()
-            except Exception:
-                pass
-            cv2.destroyAllWindows()
-            try:
-                cv2.waitKey(1)
-            except Exception:
-                pass
+        print("\n[OSTrack wrapper] Tracking finished (official run_video).")
 
 
 if __name__ == "__main__":
@@ -379,4 +219,4 @@ if __name__ == "__main__":
         device="cuda",
         debug=True,
     )
-    _tracker.track_video(visualize=True, save_result=False)
+    _tracker.track_video(use_optional_box=True, visualize=True, save_result=False)
