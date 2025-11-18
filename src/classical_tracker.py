@@ -74,6 +74,7 @@ class HoughTransformStrategy(TrackerStrategy):
              gradient_threshold=30, angle_bins=36,
              gaussian_blur_ksize=5, search_window_expand=1.2,
              vote_weight='magnitude',
+               compute_deep_similarity=None,
              show_orientations=False,
              save_orientations=False,
              orient_out_dir='results/q3_orient'):
@@ -83,6 +84,8 @@ class HoughTransformStrategy(TrackerStrategy):
         self.gaussian_blur_ksize = gaussian_blur_ksize
         self.search_window_expand = search_window_expand
         self.vote_weight = vote_weight
+        # optional callback: frame -> HxW float32 similarity map in [0,1]
+        self.compute_deep_similarity = compute_deep_similarity
         self.show_orientations = show_orientations
         self.save_orientations = save_orientations
         self.orient_out_dir = orient_out_dir
@@ -183,7 +186,23 @@ class HoughTransformStrategy(TrackerStrategy):
         # 3) 累加器投票（在搜索区局部坐标）
         acc = np.zeros((search.shape[0], search.shape[1]), dtype=np.float32)
         bins = self._angle_to_bin(ori[ys, xs])
+        # base weights: magnitude or uniform
         weights = mag[ys, xs].astype(np.float32) if self.vote_weight == 'magnitude' else np.ones_like(xs, dtype=np.float32)
+
+        # If deep similarity callback provided, sample deep map at edge points and multiply
+        if getattr(self, 'compute_deep_similarity', None) is not None:
+            try:
+                deep_map = self.compute_deep_similarity(search)  # HxW float32 [0,1]
+                # guard shape
+                if deep_map.shape != acc.shape:
+                    # try to resize (nearest)
+                    import cv2 as _cv2
+                    deep_map = _cv2.resize(deep_map, (acc.shape[1], acc.shape[0]), interpolation=_cv2.INTER_LINEAR)
+                deep_vals = deep_map[ys, xs].astype(np.float32)
+                weights = weights * deep_vals
+            except Exception:
+                # If deep callback fails, ignore and continue with base weights
+                pass
 
         for b in range(self.angle_bins):
             sel = (bins == b)
@@ -236,6 +255,7 @@ class PredictiveHoughStrategy(TrackerStrategy):
                  gradient_threshold=30, angle_bins=36,
                  gaussian_blur_ksize=5, search_window_expand=1.5,
                  vote_weight='magnitude',
+                 compute_deep_similarity=None,
                  show_orientations=False,
                  save_orientations=False,
                  orient_out_dir='results/q5_orient',
@@ -247,6 +267,7 @@ class PredictiveHoughStrategy(TrackerStrategy):
         self.gaussian_blur_ksize = gaussian_blur_ksize
         self.search_window_expand = search_window_expand
         self.vote_weight = vote_weight
+        self.compute_deep_similarity = compute_deep_similarity
         self.show_orientations = show_orientations
         self.save_orientations = save_orientations
         self.orient_out_dir = orient_out_dir
@@ -395,7 +416,23 @@ class PredictiveHoughStrategy(TrackerStrategy):
         # Voting
         acc = np.zeros((search.shape[0], search.shape[1]), dtype=np.float32)
         bins = self._angle_to_bin(ori[ys, xs])
+        # base weights: magnitude or uniform
         weights = mag[ys, xs].astype(np.float32) if self.vote_weight == 'magnitude' else np.ones_like(xs, dtype=np.float32)
+
+        # If deep similarity callback provided, sample deep map at edge points and multiply
+        if getattr(self, 'compute_deep_similarity', None) is not None:
+            try:
+                deep_map = self.compute_deep_similarity(search)  # HxW float32 [0,1]
+                # guard shape
+                if deep_map.shape != acc.shape:
+                    # try to resize (nearest)
+                    import cv2 as _cv2
+                    deep_map = _cv2.resize(deep_map, (acc.shape[1], acc.shape[0]), interpolation=_cv2.INTER_LINEAR)
+                deep_vals = deep_map[ys, xs].astype(np.float32)
+                weights = weights * deep_vals
+            except Exception:
+                # If deep callback fails, ignore and continue with base weights
+                pass
 
         for b in range(self.angle_bins):
             sel = (bins == b)
@@ -536,6 +573,7 @@ class ClassicalTracker:
                 gaussian_blur_ksize=kwargs.get('gaussian_blur_ksize', 5),
                 search_window_expand=kwargs.get('search_window_expand', 1.2),
                 vote_weight=kwargs.get('vote_weight', 'magnitude'),
+                compute_deep_similarity=kwargs.get('compute_deep_similarity', None),
                 show_orientations=kwargs.get('show_orientations', False),
                 save_orientations=kwargs.get('save_orientations', False),
                 orient_out_dir=kwargs.get('orient_out_dir', 'results/q3_orient')
@@ -550,6 +588,7 @@ class ClassicalTracker:
                 gaussian_blur_ksize=kwargs.get('gaussian_blur_ksize', 5),
                 search_window_expand=kwargs.get('search_window_expand', 1.5),
                 vote_weight=kwargs.get('vote_weight', 'magnitude'),
+                compute_deep_similarity=kwargs.get('compute_deep_similarity', None),
                 show_orientations=kwargs.get('show_orientations', False),
                 save_orientations=kwargs.get('save_orientations', False),
                 orient_out_dir=kwargs.get('orient_out_dir', 'results/q5_orient'),
