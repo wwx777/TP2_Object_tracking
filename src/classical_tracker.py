@@ -2,6 +2,7 @@
 import cv2
 import numpy as np
 from dataclasses import dataclass, field
+import time
 
 
 @dataclass
@@ -476,7 +477,8 @@ class GradientSidecar:
 class ClassicalTracker:
     __slots__ = ('video_path', 'method', 'state', 'strategy', 'grad_sidecar',
                  'visualize', 'save_result', 'visualize_process', 'output_dir',
-                 'visualize_tracking', 'visualize_hue_and_backprojection', 'save_frame')
+                 'visualize_tracking', 'visualize_hue_and_backprojection', 'save_frame',
+                 'save_prediction', 'save_meta')
 
     def __init__(self, video_path, method='meanshift', **kwargs):
         self.video_path = video_path
@@ -506,6 +508,8 @@ class ClassicalTracker:
         self.visualize_tracking = visualize_tracking
         self.visualize_hue_and_backprojection = visualize_hue_and_backprojection
         self.save_frame = save_frame
+        self.save_prediction = save_prediction
+        self.save_meta = save_meta
 
 
         self.visualize = kwargs.get('visualize', True)
@@ -572,6 +576,10 @@ class ClassicalTracker:
         if not ret:
             print("Error: Cannot read video")
             return
+
+        # Ensure instance flags reflect the current call parameters
+        self.save_result = save_result
+        self.output_dir = output_dir
 
         print("Step 1: Select ROI")
         roi = self.select_roi(frame)
@@ -644,9 +652,9 @@ class ClassicalTracker:
             if save_result:
                 self.save_frame(frame_with_box, frame_count, output_dir)
                 try:
-                    save_prediction(output_dir, frame_count, new_window)
-                except Exception:
-                    pass
+                    self.save_prediction(output_dir, frame_count, new_window)
+                except Exception as e:
+                    print(f"Failed to save prediction for frame {frame_count}: {e}")
 
             key = cv2.waitKey(60) & 0xFF
             if key == 27:
@@ -665,7 +673,7 @@ class ClassicalTracker:
         frames_processed = max(0, frame_count - 1)
         if self.save_result:
             try:
-                save_meta(self.output_dir, frames_processed, total_time)
+                self.save_meta(self.output_dir, frames_processed, total_time)
             except Exception:
                 pass
 
