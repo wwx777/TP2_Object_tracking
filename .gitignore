@@ -41,3 +41,7 @@ htmlcov/
 .mypy_cache/
 .dmypy.json
 dmypy.json
+
+/siamfc-pytorch/
+
+/got10k-toolkit/
