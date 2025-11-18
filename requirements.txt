@@ -1,0 +1,9 @@
+numpy
+opencv-python
+Pillow
+matplotlib
+scipy
+tqdm
+got10k
+torchvision
+# NOTE: torch (PyTorch) installation is handled separately in the installer script
