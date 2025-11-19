@@ -1,3 +1,75 @@
+
+# Object Tracking Toolkit
+
+Lightweight toolkit implementing and comparing classical and CNN-enhanced object tracking methods.
+
+This repository collects classical algorithms (Mean-shift, Hough/R-table), deep-feature variants, annotation and evaluation utilities, and demonstration notebooks.
+
+## Quickstart
+
+1. Create a Python virtual environment and install dependencies:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+2. Run a basic Mean-shift example:
+
+```bash
+python - <<'PY'
+from src.classical_tracker import ClassicalTracker
+
+tr = ClassicalTracker(
+    video_path='Test-Videos/Antoine_Mug.mp4',
+    method='meanshift',
+    color_space='hue'
+)
+tr.track_video(visualize=False, save_result=True, output_dir='results/evaluation/meanshift_mug')
+PY
+```
+
+3. Annotate and interpolate GT (keyframe workflow):
+
+```bash
+python scripts/annotate_video.py --video Test-Videos/Antoine_Mug.mp4 --output results/gt_mug --frames-file results/gt_mug/keyframes.txt
+python scripts/interpolate_gt.py --keyframes results/gt_mug/keyframes.txt --annotations results/gt_mug/annotations.csv --out_dir results/gt_mug
+```
+
+4. Evaluate results:
+
+```bash
+python - <<'PY'
+from src import evaluation
+res = evaluation.evaluate('results/evaluation/meanshift_mug/predictions.csv', 'results/gt_mug/gt.csv', cle_threshold=20.0)
+print(res)
+PY
+```
+
+## Contents (short)
+
+- `src/classical_tracker.py` — main controller and Strategy implementations (Mean-shift, Hough, predictive variants)
+- `src/features.py` — color & gradient helpers and visualizations
+- `src/deep_tracker.py` — CNN feature extractor and deep-mean-shift pipeline
+- `scripts/` — annotation and helper scripts (`annotate_video.py`, `interpolate_gt.py`, `select_keyframes.py`)
+- `test/` — notebooks and demos (e.g., `basic_questions.ipynb`)
+- `results/` — output directory (not tracked)
+
+## Recommended workflow
+
+1. Create GT for a video (annotate or interpolate keyframes).
+2. Run one or more trackers and save `predictions.csv` under `results/evaluation/<method>_<video>/`.
+3. Run `src/evaluation.evaluate()` to compute IoU, CLE, success/precision metrics.
+4. Inspect visualizations and diagnostics saved by trackers.
+
+## Contributing
+
+To add a new algorithm: implement a `TrackerStrategy` (see `src/classical_tracker.py`), register it in the factory, and add a brief demo script or notebook.
+
+## License & Contact
+
+Provided for research and education. Open an issue if you want help running experiments or generating diagnostics for result folders.
 # 🎯 Object Tracking Project
 
 Implementation and comparison of classical and deep learning object tracking algorithms.
@@ -484,87 +556,4 @@ class NewTrackerStrategy(TrackerStrategy):
         # Update tracking window
         return new_window
 ```
-
----
-
-## 📝 中文说明 (Chinese Notes)
-
-### 如果要修改代码 (If You Want to Modify the Code)
-
-#### 1. 修改跟踪参数 (Modify Tracking Parameters)
-在 `test/basic_questions.ipynb` 中调整参数：
-
-**Mean-shift 参数:**
-```python
-tracker = ClassicalTracker(
-    video_path=VIDEO_PATH_MUG,
-    method='meanshift',
-    color_space='hue',        # 'hue', 'hsv', 'rgb'
-    update_model=True,         # 是否自适应更新模型
-    update_rate=0.05           # 更新率 (0.01-0.1)
-)
-```
-
-**Hough Transform 参数:**
-```python
-tracker = ClassicalTracker(
-    video_path=VIDEO_PATH_BALL,
-    method='hough',
-    gradient_threshold=30,     # 梯度阈值 (20-50)
-    angle_bins=36,             # 角度分组数 (36-72)
-    gaussian_blur_ksize=5,     # 高斯平滑核大小 (3, 5, 7)
-    search_window_expand=1.25, # 搜索区域扩展倍数 (1.2-1.5)
-    vote_weight='magnitude'    # 投票权重 ('magnitude' or 'uniform')
-)
-```
-
-#### 2. 添加新的跟踪方法 (Add New Tracking Method)
-在 `src/classical_tracker.py` 中：
-
-```python
-# Step 1: 定义新策略类
-class YourNewStrategy(TrackerStrategy):
-    def __init__(self, *, your_param1, your_param2):
-        self.param1 = your_param1
-        self.param2 = your_param2
-    
-    def init(self, state: TrackState, frame, roi):
-        # 初始化你的模型
-        state.model = your_initialization(frame, roi)
-        state.track_window = roi
-    
-    def update(self, state: TrackState, frame):
-        # 实现跟踪逻辑
-        new_window = your_tracking_logic(state, frame)
-        state.track_window = new_window
-        return new_window
-
-# Step 2: 在 _build_strategy() 中注册
-def _build_strategy(self, method, kwargs, ...):
-    if method == 'meanshift':
-        return MeanShiftStrategy(...)
-    elif method == 'hough':
-        return HoughTransformStrategy(...)
-    elif method == 'your_method':  # 添加这里
-        return YourNewStrategy(
-            your_param1=kwargs.get('your_param1', default_value),
-            your_param2=kwargs.get('your_param2', default_value)
-        )
-```
-
-#### 3. 修改可视化 (Modify Visualization)
-在 `src/features.py` 中添加新的可视化函数，然后在 `classical_tracker.py` 的 `track_video()` 中调用。
-
-#### 4. 修改 ROI 选择 (Modify ROI Selection)
-在 `src/utils.py` 的 `ROISelector` 类中修改鼠标回调逻辑。
-
-#### 5. 常见问题 (Common Issues)
-- **ROI 选择框不正确**: 已修复 xy 轴问题，确保使用最新代码
-- **窗口无法关闭**: 按 ESC 或 'q' 键退出
-- **结果不保存**: 检查 `save_result=True` 和 `output_dir` 参数
-
-
-
-
-
 
