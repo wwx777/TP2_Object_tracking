@@ -1,6 +1,6 @@
 """
 Feature extraction for tracking
-包括颜色直方图、梯度等特征提取方法
+Includes color histograms, gradients and other feature extraction utilities
 """
 import cv2
 import numpy as np
@@ -8,32 +8,21 @@ from pathlib import Path
 
 
 def extract_color_histogram(roi, feature_type='hue', mask=None):
-    """
-    提取颜色直方图
-    
-    Args:
-        roi: ROI区域 (BGR图像)
-        feature_type: 'hue', 'hsv', 'rgb'
-        mask: 可选的掩码
-        
-    Returns:
-        hist: 归一化的直方图
-    """
     if feature_type == 'hue':
-        # Q1: 单通道Hue直方图
+        # Q1: single-channel Hue histogram
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
-        # 创建掩码：过滤掉饱和度<30, 亮度<20或>235的像素
+        # Create mask: filter out pixels with saturation < 30 or value <20 or >235
         if mask is None:
             mask = cv2.inRange(hsv, 
                              np.array((0., 30., 20.)), 
                              np.array((180., 255., 235.)))
         
-        # 计算Hue通道直方图
+        # Compute Hue channel histogram
         hist = cv2.calcHist([hsv], [0], mask, [180], [0, 180])
         
     elif feature_type == 'hsv':
-        # Q2改进: H+S双通道直方图
+        # Q2 improvement: H+S two-channel histogram
         hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
         
         if mask is None:
@@ -41,12 +30,12 @@ def extract_color_histogram(roi, feature_type='hue', mask=None):
                              np.array((0., 30., 20.)), 
                              np.array((180., 255., 235.)))
         
-        # 计算H和S的二维直方图
+        # Compute 2D histogram for H and S
         hist = cv2.calcHist([hsv], [0, 1], mask, 
-                          [180, 256], [0, 180, 0, 256])
+                  [180, 256], [0, 180, 0, 256])
         
     elif feature_type == 'rgb':
-        # RGB颜色直方图
+        # RGB color histogram
         hist_b = cv2.calcHist([roi], [0], mask, [256], [0, 256])
         hist_g = cv2.calcHist([roi], [1], mask, [256], [0, 256])
         hist_r = cv2.calcHist([roi], [2], mask, [256], [0, 256])
@@ -55,24 +44,14 @@ def extract_color_histogram(roi, feature_type='hue', mask=None):
     else:
         raise ValueError(f"Unknown feature_type: {feature_type}")
     
-    # 归一化到[0, 255]
+    # Normalize to [0, 255]
     cv2.normalize(hist, hist, 0, 255, cv2.NORM_MINMAX)
     
     return hist
 
 
 def compute_backprojection(frame, hist, feature_type='hue'):
-    """
-    计算反向投影
-    
-    Args:
-        frame: 当前帧 (BGR图像)
-        hist: 目标直方图
-        feature_type: 'hue', 'hsv', 'rgb'
-        
-    Returns:
-        dst: 反向投影图像 (权重图)
-    """
+   
     if feature_type == 'hue':
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         dst = cv2.calcBackProject([hsv], [0], hist, [0, 180], 1)
@@ -83,7 +62,7 @@ def compute_backprojection(frame, hist, feature_type='hue'):
                                  [0, 180, 0, 256], 1)
         
     elif feature_type == 'rgb':
-        # RGB反向投影需要分别计算
+        # RGB backprojection computed per-channel
         hist_b = hist[:256]
         hist_g = hist[256:512]
         hist_r = hist[512:]
@@ -92,7 +71,7 @@ def compute_backprojection(frame, hist, feature_type='hue'):
         dst_g = cv2.calcBackProject([frame], [1], hist_g, [0, 256], 1)
         dst_r = cv2.calcBackProject([frame], [2], hist_r, [0, 256], 1)
         
-        # 合并三个通道
+        # Merge three channels
         dst = cv2.addWeighted(dst_b, 0.33, dst_g, 0.33, 0)
         dst = cv2.addWeighted(dst, 1.0, dst_r, 0.33, 0)
     
@@ -101,33 +80,33 @@ def compute_backprojection(frame, hist, feature_type='hue'):
 
 def visualize_hue_and_backprojection(frame, hist, track_window=None, save_dir=None, frame_num=None):
     """
-    Q2可视化：显示Hue通道和反向投影
-    
+    Q2 visualization: show Hue channel and backprojection
+
     Args:
-        save_dir: 如果提供，会保存可视化结果
-        frame_num: 帧编号
+        save_dir: if provided, save visualization results
+        frame_num: frame index
     """
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     hue_channel = hsv[:, :, 0]
     
-    # 计算反向投影
+    # compute backprojection
     backproj = cv2.calcBackProject([hsv], [0], hist, [0, 180], 1)
     
-    # 转换成可以画矩形的格式
+    # convert to drawable format
     hue_img = cv2.cvtColor(hue_channel, cv2.COLOR_GRAY2BGR)
     backproj_img = cv2.cvtColor(backproj, cv2.COLOR_GRAY2BGR)
     
-    # 画跟踪框
+    # draw tracking rectangle
     if track_window is not None:
         r, c, w, h = track_window
         cv2.rectangle(hue_img, (r, c), (r + w, c + h), (0, 255, 0), 2)
         cv2.rectangle(backproj_img, (r, c), (r + w, c + h), (0, 255, 0), 2)
     
-    # 显示
+    # show
     cv2.imshow('Hue Channel', hue_img)
     cv2.imshow('Back Projection', backproj_img)
     
-    # ✅ 保存可视化结果
+    # Save visualization results if requested
     if save_dir is not None and frame_num is not None:
         import os
         os.makedirs(save_dir, exist_ok=True)
@@ -138,34 +117,34 @@ def visualize_hue_and_backprojection(frame, hist, track_window=None, save_dir=No
 
 def compute_gradients(frame, threshold=30):
     """
-    Q3: 计算梯度方向和幅值
-    
+    Q3: compute gradient orientations and magnitudes
+
     Args:
-        frame: 输入帧（BGR彩色图像）
-        threshold: 梯度幅值阈值，低于此值的像素被mask
-        
+        frame: input frame (BGR color image)
+        threshold: gradient magnitude threshold; pixels below are masked out
+
     Returns:
-        orientations: 梯度方向 (弧度)，shape (H, W)
-        magnitudes: 梯度幅值，shape (H, W)
-        mask: 显著梯度的掩码，shape (H, W)，True表示梯度显著
+        orientations: gradient direction (radians), shape (H, W)
+        magnitudes: gradient magnitude, shape (H, W)
+        mask: boolean mask of salient gradients, shape (H, W)
     """
-    # 转换为灰度图
+    # Convert to grayscale
     if len(frame.shape) == 3:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     else:
         gray = frame
     
-    # 计算 x 和 y 方向的梯度 (使用 Sobel 算子)
+    # Compute gradients in x and y using Sobel operator
     grad_x = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
     grad_y = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     
-    # 计算梯度幅值
+    # Compute gradient magnitude
     magnitudes = np.sqrt(grad_x**2 + grad_y**2)
     
-    # 计算梯度方向 (弧度)
+    # Compute gradient orientation (radians)
     orientations = np.arctan2(grad_y, grad_x)
     
-    # 使用阈值创建掩码：梯度幅值 > threshold 的像素
+    # Create mask by thresholding gradient magnitude
     mask = magnitudes > threshold
     
     return orientations, magnitudes, mask
@@ -173,38 +152,38 @@ def compute_gradients(frame, threshold=30):
 
 def visualize_gradients(frame, orientations, magnitudes, mask, window_name='Gradient Orientation'):
     """
-    Q3: 可视化梯度方向
-    被mask的像素（梯度不显著）显示为红色
-    
+    Q3: visualize gradient orientations
+    Pixels masked out (non-salient gradients) are shown in red
+
     Args:
-        frame: 原始帧
-        orientations: 梯度方向
-        magnitudes: 梯度幅值
-        mask: 显著梯度的掩码
-        window_name: 窗口名称
+        frame: original frame
+        orientations: gradient orientations
+        magnitudes: gradient magnitudes
+        mask: salient gradient mask
+        window_name: window title
     """
-    # 创建可视化图像
+    # create visualization image
     h, w = frame.shape[:2]
     
-    # 方法1：将方向映射到颜色（HSV色彩空间）
-    # H (色调) = 方向, S (饱和度) = 1, V (亮度) = 归一化的幅值
-    orientation_normalized = (orientations + np.pi) / (2 * np.pi)  # 归一化到 [0, 1]
-    orientation_hue = (orientation_normalized * 180).astype(np.uint8)  # 转换到 [0, 180] for OpenCV
-    
-    # 创建 HSV 图像
+    # Method 1: map orientation to color (HSV)
+    # H (hue) = orientation, S = 1, V = normalized magnitude
+    orientation_normalized = (orientations + np.pi) / (2 * np.pi)  # normalize to [0, 1]
+    orientation_hue = (orientation_normalized * 180).astype(np.uint8)  # convert to [0, 180] for OpenCV
+
+    # Create HSV image
     hsv_img = np.zeros((h, w, 3), dtype=np.uint8)
-    hsv_img[:, :, 0] = orientation_hue  # H: 方向
-    hsv_img[:, :, 1] = 255  # S: 饱和度最大
+    hsv_img[:, :, 0] = orientation_hue  # H: orientation
+    hsv_img[:, :, 1] = 255  # S: max saturation
     
-    # V: 根据梯度幅值设置亮度
+    # V: set brightness according to gradient magnitude
     magnitude_normalized = cv2.normalize(magnitudes, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     hsv_img[:, :, 2] = magnitude_normalized
     
-    # 转换为 BGR
+    # Convert to BGR
     orientation_img = cv2.cvtColor(hsv_img, cv2.COLOR_HSV2BGR)
     
-    # ✅ 关键：被mask的像素（梯度不显著）显示为红色
-    orientation_img[~mask] = [0, 0, 255]  # BGR: 红色
+    # Masked-out pixels (non-salient gradients) are shown in red
+    orientation_img[~mask] = [0, 0, 255]  # BGR: red
     
     cv2.imshow(window_name, orientation_img)
     
@@ -213,15 +192,15 @@ def visualize_gradients(frame, orientations, magnitudes, mask, window_name='Grad
 
 def visualize_gradient_magnitude(magnitudes, mask, window_name='Gradient Magnitude'):
     """
-    Q3: 可视化梯度幅值
+    Q3: visualize gradient magnitude
     """
-    # 归一化到 [0, 255]
+    # Normalize to [0, 255]
     mag_normalized = cv2.normalize(magnitudes, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     
-    # 创建3通道图像用于显示
+    # create 3-channel image for display
     mag_img = cv2.cvtColor(mag_normalized, cv2.COLOR_GRAY2BGR)
     
-    # 被mask的像素显示为红色
+    # Masked-out pixels displayed as red
     mag_img[~mask] = [0, 0, 255]
     
     cv2.imshow(window_name, mag_img)
@@ -242,7 +221,7 @@ def render_gradient_quadrants(frame, orientations, magnitudes, mask, save_path=N
     C = cv2.applyColorMap(mag_u8, cv2.COLORMAP_BONE)
 
     # Selected orientations（mask 外为红）
-    # 直接复用你已有的可视化，但不弹窗
+    # Reuse existing visualization but do not create a popup window
     orientation_normalized = (orientations + np.pi) / (2 * np.pi)
     H = (orientation_normalized * 180).astype(np.uint8)
     S = np.full_like(H, 255, np.uint8)
@@ -251,7 +230,7 @@ def render_gradient_quadrants(frame, orientations, magnitudes, mask, save_path=N
     D = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
     D[~mask] = (0, 0, 255)
 
-    # 标题
+    # Titles
     def title(img, text):
         im = img.copy()
         cv2.putText(im, text, (10, im.shape[0]-12), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255,255,255), 2, cv2.LINE_AA)
@@ -262,7 +241,7 @@ def render_gradient_quadrants(frame, orientations, magnitudes, mask, save_path=N
     C = title(C, 'Gradient norm')
     D = title(D, 'Selected orientations')
 
-    # 拼接 2x2
+    # stack into 2x2 panel
     top = np.hstack([A, B])
     bottom = np.hstack([C, D])
     panel = np.vstack([top, bottom])
@@ -275,30 +254,30 @@ def render_gradient_quadrants(frame, orientations, magnitudes, mask, save_path=N
 
 def visualize_hough_transform(frame, accumulator, search_region, detected_window, save_path=None):
     """
-    Q4: 可视化 Hough Transform 累加器和检测结果
-    
+    Q4: visualize Hough Transform accumulator and detection results
+
     Args:
-        frame: 原始帧
-        accumulator: Hough Transform 累加器 H(x) (搜索区局部坐标)
-        search_region: 搜索区域 (r1, c1, r2, c2) 在原图坐标系
-        detected_window: 检测到的窗口 (r, c, w, h) 在原图坐标系
-        save_path: 保存路径
-        
+        frame: original frame
+        accumulator: Hough Transform accumulator H(x) (search-region local coords)
+        search_region: search region (r1, c1, r2, c2) in image coords
+        detected_window: detected window (r, c, w, h) in image coords
+        save_path: path to save visualization
+
     Returns:
-        visualization: 可视化结果图像
+        visualization: visualization image
     """
     if accumulator is None:
         return frame.copy()
     
     r1, c1, r2, c2 = search_region
     
-    # 1. 归一化累加器到 [0, 255]
+    # 1. normalize accumulator to [0, 255]
     acc_normalized = cv2.normalize(accumulator, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     
     # 2. 应用热力图颜色映射 (JET colormap)
     acc_heatmap = cv2.applyColorMap(acc_normalized, cv2.COLORMAP_JET)
     
-    # 3. 调整累加器热力图大小到搜索区域大小
+    # 3. resize accumulator heatmap to search-region size
     search_h, search_w = c2 - c1, r2 - r1
     if acc_heatmap.shape[0] != search_h or acc_heatmap.shape[1] != search_w:
         acc_heatmap = cv2.resize(acc_heatmap, (search_w, search_h))
@@ -306,14 +285,14 @@ def visualize_hough_transform(frame, accumulator, search_region, detected_window
     # 4. 创建原图副本
     frame_with_search = frame.copy()
     
-    # 5. 在搜索区域叠加热力图 (50% 透明度)
+    # 5. overlay heatmap on search region (50% alpha)
     alpha = 0.5
     frame_with_search[c1:c2, r1:r2] = cv2.addWeighted(
         frame[c1:c2, r1:r2], 1 - alpha,
         acc_heatmap, alpha, 0
     )
     
-    # 6. 画出搜索区域边界 (绿色虚线)
+    # 6. draw search region boundary (green)
     cv2.rectangle(frame_with_search, (r1, c1), (r2, c2), (0, 255, 0), 2, cv2.LINE_4)
     
     # 7. 画出检测到的目标窗口 (红色实线)
@@ -321,7 +300,7 @@ def visualize_hough_transform(frame, accumulator, search_region, detected_window
         r, c, w, h = detected_window
         cv2.rectangle(frame_with_search, (r, c), (r + w, c + h), (0, 0, 255), 3)
     
-    # 8. 找到累加器最大值位置并标记
+    # 8. find accumulator max location and mark it
     max_val = accumulator.max()
     max_loc_local = np.unravel_index(accumulator.argmax(), accumulator.shape)
     max_y_local, max_x_local = max_loc_local

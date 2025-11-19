@@ -57,15 +57,15 @@ class DeepTracker:
         self.device = torch.device(device)
         self.term_crit = term_crit
 
-        # 状态
+        # State
         self.state = DeepTrackState()
 
-        # 准备 CNN 特征提取器
+        # Prepare CNN feature extractor
         self.model, self._feature_blob = self._build_feature_extractor(model_name, layer_name)
         self.model.to(self.device)
         self.model.eval()
 
-        # 标准 ImageNet 预处理
+        # Standard ImageNet preprocessing
         self.transform = transforms.Compose([
             transforms.ToTensor(),  # [0,1], CHW
             transforms.Normalize(
@@ -74,7 +74,7 @@ class DeepTracker:
             ),
         ])
 
-        # utils 模块：沿用 classic tracker 的 ROISelector / 可视化 / 保存函数
+        # utils module: reuse classical tracker's ROISelector / visualization / save functions
         from .utils import ROISelector, visualize_tracking, save_frame, save_prediction, save_meta
         self.ROISelector = ROISelector
         self.visualize_tracking = visualize_tracking
@@ -83,7 +83,7 @@ class DeepTracker:
         self.save_meta = save_meta
 
     # ----------------------------------------------------------------------
-    # 构建 CNN 特征抽取器（带 hook 抓取中间层 feature map）
+    # Build CNN feature extractor (register hook to capture intermediate feature map)
     # ----------------------------------------------------------------------
     def _build_feature_extractor(self, model_name, layer_name):
         if model_name.lower() == "resnet50":
@@ -98,7 +98,7 @@ class DeepTracker:
         def hook_fn(module, input, output):
             feature_blob["feat"] = output.detach()
 
-        # 注册 hook 到指定层
+        # Register a forward hook on the specified layer
         try:
             layer = getattr(backbone, layer_name)
         except AttributeError:
@@ -108,7 +108,7 @@ class DeepTracker:
         return backbone, feature_blob
 
     # ----------------------------------------------------------------------
-    # 图像 -> tensor，跑一遍 CNN，取出 feature map
+    # Image -> tensor, run through CNN and extract feature map
     # ----------------------------------------------------------------------
     def _extract_features(self, frame_bgr: np.ndarray) -> torch.Tensor:
         # BGR -> RGB
@@ -152,7 +152,7 @@ class DeepTracker:
         return fx, fy, fw, fh
 
     # ----------------------------------------------------------------------
-    # 通道选择：variance 或 Fisher score
+    # Channel selection: variance or Fisher score
     # ----------------------------------------------------------------------
     def _select_channels(
         self,
@@ -189,7 +189,7 @@ class DeepTracker:
         return topk.cpu().numpy()  # [K]
 
     # ----------------------------------------------------------------------
-    # 构建 template：选通道后，把目标 ROI 特征保存下来
+    # Build template: after selecting channels, save target ROI features
     # ----------------------------------------------------------------------
     def _build_template(
         self,
@@ -254,14 +254,14 @@ class DeepTracker:
         return sim_np
 
     # ----------------------------------------------------------------------
-    # 公开接口：选择 ROI
+    # Public interface: select ROI
     # ----------------------------------------------------------------------
     def select_roi(self, frame: np.ndarray):
         roi = self.ROISelector().select_roi(frame)
         return roi  # (x,y,w,h)
 
     # ----------------------------------------------------------------------
-    # 初始化：选择 ROI -> 计算特征 -> 选通道 -> 构建 template
+    # Initialization: select ROI -> extract features -> select channels -> build template
     # ----------------------------------------------------------------------
     def initialize(self, frame: np.ndarray, roi: Tuple[int, int, int, int]):
         H, W = frame.shape[:2]
@@ -305,21 +305,21 @@ class DeepTracker:
         sim_norm = cv2.normalize(sim_img, None, 0, 255, cv2.NORM_MINMAX)
         backproj = sim_norm.astype(np.uint8)
 
-        # mean-shift 跟踪
+        # mean-shift tracking
         x, y, w, h = self.state.track_window
         _, new_window = cv2.meanShift(backproj, (x, y, w, h), self.term_crit)
         self.state.track_window = new_window
         self.state.last_similarity_map = sim_img
 
         if visualize_backproj:
-            # 可视化 similarity map
+            # visualize similarity map
             disp = cv2.applyColorMap(sim_norm.astype(np.uint8), cv2.COLORMAP_JET)
             cv2.imshow("Q6: Similarity Backprojection", disp)
 
         return new_window
 
     # ----------------------------------------------------------------------
-    # 主入口：整段视频跟踪
+    # Main entry: track the entire video
     # ----------------------------------------------------------------------
     def track_video(
         self,
@@ -356,7 +356,7 @@ class DeepTracker:
             if not ret:
                 break
 
-            # 先复制用于可视化/保存
+            # copy frame for visualization/saving
             frame_with_box = frame.copy()
 
             new_window = self.update(frame, visualize_backproj=visualize_backproj)

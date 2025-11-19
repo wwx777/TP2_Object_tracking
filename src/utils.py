@@ -10,22 +10,22 @@ import json
 
 
 class ROISelector:
-    """交互式ROI选择器"""
+    """Interactive ROI selector"""
     
     def __init__(self):
         self.roi_defined = False
         self.r, self.c, self.w, self.h = 0, 0, 0, 0
         
     def _mouse_callback(self, event, x, y, flags, param):
-        """鼠标回调函数"""
+        """Mouse callback"""
         if event == cv2.EVENT_LBUTTONDOWN:
             self.r, self.c = x, y
             self.roi_defined = False
             
         elif event == cv2.EVENT_LBUTTONUP:
             r2, c2 = x, y
-            # 修复：r是x(列)，c是y(行)
-            # w = 宽度(x方向), h = 高度(y方向)
+            # Fix: r is x (column), c is y (row)
+            # w = width (x-direction), h = height (y-direction)
             self.w = abs(r2 - self.r)
             self.h = abs(c2 - self.c)
             self.r = min(self.r, r2)
@@ -84,9 +84,9 @@ class ROISelector:
 def visualize_tracking(frame, track_window, window_name='Tracking', 
                        color=(255, 0, 0), thickness=2):
     """
-    在帧上绘制跟踪框
-    注意：不要在这里处理按键，让主循环处理
-    
+    Draw tracking box on the frame.
+    Note: Do not handle key events here; the main loop should handle them.
+
     Args:
         window_name: If None, don't show window (for save-only mode)
     """
@@ -109,11 +109,11 @@ def visualize_tracking(frame, track_window, window_name='Tracking',
     if window_name is not None:
         cv2.imshow(window_name, frame_with_box)
     
-    return frame_with_box  # ✅ 只显示，不处理按键
+    return frame_with_box  # display only, do not handle keys
 
 
 def save_frame(frame, frame_number, output_dir='results/frames'):
-    """保存帧到文件"""
+    """Save frame to file"""
     os.makedirs(output_dir, exist_ok=True)
     filename = f"{output_dir}/Frame_{frame_number:04d}.png"
     cv2.imwrite(filename, frame)

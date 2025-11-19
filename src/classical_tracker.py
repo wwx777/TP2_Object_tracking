@@ -7,27 +7,27 @@ import time
 
 @dataclass
 class TrackState:
-    # Python 3.10+ 可以用 | 语法；若你要兼容 3.9，用 Optional[Tuple[int,int,int,int]]
+    # Python 3.10+ can use `|` syntax; for compatibility with 3.9 use Optional[Tuple[int,int,int,int]]
     track_window: tuple | None = None          # (r, c, w, h)
-    model: np.ndarray | None = None            # 直方图 / R-Table
-    # 关键修复：用 default_factory 创建默认的 numpy 数组
+    model: np.ndarray | None = None            # histogram / R-Table
+    # Use default_factory to create default numpy array
     velocity: np.ndarray = field(default_factory=lambda: np.zeros(2, dtype=float))
 
-    # 缓存梯度给 Hough / 可视化复用
+    # Cache gradients for Hough / visualization reuse
     orientations: np.ndarray | None = None
     magnitudes:  np.ndarray | None = None
     grad_mask:   np.ndarray | None = None
     
-    # Q4: Hough Transform 累加器可视化
-    hough_accumulator: np.ndarray | None = None  # 累加器 H(x)
+    # Q4: Hough Transform accumulator visualization
+    hough_accumulator: np.ndarray | None = None  # accumulator H(x)
     search_region: tuple | None = None           # (r1, c1, r2, c2)
     
-    # Q5: 预测和自适应更新
-    kalman: cv2.KalmanFilter | None = None     # Kalman 滤波器
-    predicted_window: tuple | None = None       # 预测的窗口位置
-    model_confidence: float = 1.0               # 模型置信度 [0, 1]
-    confidence_history: list = field(default_factory=list)  # 置信度历史（最近N帧）
-    tracking_quality: float = 1.0               # 跟踪质量评分 [0, 1]
+    # Q5: prediction and adaptive updates
+    kalman: cv2.KalmanFilter | None = None     # Kalman filter
+    predicted_window: tuple | None = None       # predicted window
+    model_confidence: float = 1.0               # model confidence [0, 1]
+    confidence_history: list = field(default_factory=list)  # confidence history
+    tracking_quality: float = 1.0               # tracking quality score [0, 1]
 
 
 class TrackerStrategy:
@@ -66,9 +66,9 @@ class MeanShiftStrategy(TrackerStrategy):
 
 class HoughTransformStrategy(TrackerStrategy):
     """
-    手写 Generalized Hough（无尺度/无旋转）
-    依赖: compute_gradients(frame, threshold) -> (orientations, magnitudes, mask)
-    用法: 在 _build_strategy 分支中返回本类实例即可。
+    Handwritten Generalized Hough (no scale/rotation)
+    Depends on: compute_gradients(frame, threshold) -> (orientations, magnitudes, mask)
+    Usage: return an instance of this class in the _build_strategy branch.
     """
     def __init__(self, *, compute_gradients,
              gradient_threshold=30, angle_bins=36,
@@ -126,8 +126,8 @@ class HoughTransformStrategy(TrackerStrategy):
 
     def _build_rtable(self, frame, roi):
         """
-        在 ROI 裁剪上构建 R-Table（全部用 ROI 局部坐标）
-        向量 r = [x_edge - cx, y_edge - cy]，其中 cx=w/2, cy=h/2
+        Build R-Table on the ROI crop (all in ROI-local coordinates).
+        Vector r = [x_edge - cx, y_edge - cy], with cx = w/2, cy = h/2.
         """
         r, c, w, h = roi
         roi_img = frame[c:c+h, r:r+w]
@@ -135,16 +135,15 @@ class HoughTransformStrategy(TrackerStrategy):
 
         ys, xs = np.where(msk)
         if xs.size == 0:
-            # 空表也要占位，保持索引一致
+            # Keep placeholder for empty table to maintain index consistency
             return [np.empty((0, 2), np.float32) for _ in range(self.angle_bins)]
 
-        cx, cy = w / 2.0, h / 2.0  # ROI 局部中心
+        cx, cy = w / 2.0, h / 2.0 
         bins = self._angle_to_bin(ori[ys, xs])
         rt = [[] for _ in range(self.angle_bins)]
         for x, y, b in zip(xs, ys, bins):
             rt[b].append([x - cx, y - cy])
 
-        # 压成 ndarray
         rt = [np.asarray(v, dtype=np.float32) if len(v) else np.empty((0, 2), np.float32)
               for v in rt]
         return rt
@@ -171,19 +170,19 @@ class HoughTransformStrategy(TrackerStrategy):
         if self.rtable is None:
             return state.track_window
         self._frame_idx += 1
-        # 1) 搜索区
+        # 1) search region
         r1, c1, r2, c2 = self._search_region(state.track_window, W, H)
         search = frame[c1:c2, r1:r2]
         if search.size == 0:
             return state.track_window
 
-        # 2) 搜索区梯度
+        # 2) gradients in the search region
         ori, mag, msk = self.compute_gradients(search, threshold=self.gradient_threshold)
         ys, xs = np.where(msk)
         if xs.size == 0:
             return state.track_window
 
-        # 3) 累加器投票（在搜索区局部坐标）
+        # 3) accumulator voting (in search-region local coordinates)
         acc = np.zeros((search.shape[0], search.shape[1]), dtype=np.float32)
         bins = self._angle_to_bin(ori[ys, xs])
         # base weights: magnitude or uniform
@@ -213,7 +212,7 @@ class HoughTransformStrategy(TrackerStrategy):
                 continue
             pts = np.stack([xs[sel], ys[sel]], axis=1).astype(np.int32)  # [M,2]
             wv  = weights[sel]
-            # 广播得到中心候选 [M,K,2]: center = edge - rvec
+            # Broadcast to get center candidates [M,K,2]: center = edge - rvec
             cands = pts[:, None, :] - rvecs[None, :, :]                  # [M,K,2]
             cx = np.rint(cands[..., 0]).astype(np.int32).reshape(-1)
             cy = np.rint(cands[..., 1]).astype(np.int32).reshape(-1)
@@ -221,11 +220,11 @@ class HoughTransformStrategy(TrackerStrategy):
             ok = (cx >= 0) & (cx < acc.shape[1]) & (cy >= 0) & (cy < acc.shape[0])
             np.add.at(acc, (cy[ok], cx[ok]), ww[ok])
 
-        # 4) 取峰
+        # 4) find peak
         cx_local, cy_local = self._smooth_argmax(acc)
         cx_abs, cy_abs = cx_local + r1, cy_local + c1
 
-        # 5) 映射为窗口
+        # 5) map to window
         r_new = int(round(cx_abs - self.win_w / 2.0))
         c_new = int(round(cy_abs - self.win_h / 2.0))
         r_new = max(0, min(W - self.win_w, r_new))
@@ -234,7 +233,7 @@ class HoughTransformStrategy(TrackerStrategy):
         new_window = (r_new, c_new, self.win_w, self.win_h)
         state.track_window = new_window
         
-        # Q4: 保存累加器和搜索区域用于可视化
+        # Q4: save accumulator and search region for visualization
         state.hough_accumulator = acc.copy()
         state.search_region = (r1, c1, r2, c2)
         
@@ -246,7 +245,7 @@ class HoughTransformStrategy(TrackerStrategy):
 class PredictiveHoughStrategy(TrackerStrategy):
     """
     Q5: Hough Transform with Kalman prediction and adaptive R-Table update.
-    
+
     Improvements:
     1. Kalman filter predicts search region center (motion smoothness)
     2. Adaptive R-Table update (robust to appearance changes)
@@ -289,6 +288,7 @@ class PredictiveHoughStrategy(TrackerStrategy):
                                              [0, 1, 0, 1],
                                              [0, 0, 1, 0],
                                              [0, 0, 0, 1]], np.float32)
+        # processNoiseCov and measurementNoiseCov are covariance matrices
         kalman.processNoiseCov = np.eye(4, dtype=np.float32) * 0.03
         kalman.measurementNoiseCov = np.eye(2, dtype=np.float32) * 1.0
         kalman.statePost = np.array([[x], [y], [0], [0]], np.float32)
@@ -640,7 +640,7 @@ class ClassicalTracker:
 
             new_window = self.update(frame)
 
-            # 梯度側掛：一行接入，可隨時關
+            # Gradient sidecar: single-line integration, can be toggled off
             self.grad_sidecar(self.state, frame, frame_count)
 
             # Always prepare an annotated frame for saving even if not visualizing
@@ -650,10 +650,10 @@ class ClassicalTracker:
                 color=(255, 0, 0), thickness=2
             )
 
-            # 根据不同方法使用不同的可视化（仅在需要展示过程时打开窗口）
+            # Use different visualizations per method (only when visualize_process is enabled)
             if visualize_process:
                 if isinstance(self.strategy, MeanShiftStrategy):
-                    # Mean-shift: 显示Hue和反向投影
+                    # Mean-shift: show Hue and backprojection
                     # When `visualize_process` is enabled we also want to save
                     # the Hue/backprojection visualization for debugging. Save
                     # into a `process/` subfolder under `output_dir`.
@@ -667,7 +667,7 @@ class ClassicalTracker:
                         frame_num=frame_count
                     )
                 elif isinstance(self.strategy, HoughTransformStrategy):
-                    # Q3: 梯度四宫格可视化
+                    # Q3: gradient 2x2 panel visualization
                     from .features import render_gradient_quadrants, compute_gradients
                     orientations, magnitudes, mask = compute_gradients(frame, threshold=self.strategy.gradient_threshold)
                     
@@ -677,11 +677,11 @@ class ClassicalTracker:
                         os.makedirs(output_dir, exist_ok=True)
                         gradient_save_path = f"{output_dir}/gradient_quadrants_{frame_count:04d}.png"
                     
-                    # 渲染并显示四宫格
+                    # Render and display 2x2 panel
                     panel = render_gradient_quadrants(frame, orientations, magnitudes, mask, gradient_save_path)
                     cv2.imshow('Q3: Gradient Analysis', panel)
                     
-                    # Q4: Hough Transform 累加器可视化
+                    # Q4: Hough Transform accumulator visualization
                     from .features import visualize_hough_transform
                     if self.state.hough_accumulator is not None and self.state.search_region is not None:
                         hough_save_path = None
