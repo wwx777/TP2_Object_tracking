@@ -1,13 +1,13 @@
 
-# Object Tracking Toolkit
+# Object Tracking Toolkit — Minimal README
 
-Lightweight toolkit implementing and comparing classical and CNN-enhanced object tracking methods.
+Purpose
+-------
+Small toolkit with reference implementations of classical trackers (Mean-shift, Hough) and a CNN-feature variant, plus simple annotation and evaluation tools.
 
-This repository collects classical algorithms (Mean-shift, Hough/R-table), deep-feature variants, annotation and evaluation utilities, and demonstration notebooks.
-
-## Quickstart
-
-1. Create a Python virtual environment and install dependencies:
+Quickstart (minimal)
+---------------------
+1. Create a venv and install dependencies:
 
 ```bash
 python -m venv .venv
@@ -15,122 +15,34 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-2. Run a basic Mean-shift example:
+2. Run the default Mean-shift demo and save results:
 
 ```bash
 python - <<'PY'
 from src.classical_tracker import ClassicalTracker
-
-tr = ClassicalTracker(
-    video_path='Test-Videos/Antoine_Mug.mp4',
-    method='meanshift',
-    color_space='hue'
-)
-tr.track_video(visualize=False, save_result=True, output_dir='results/evaluation/meanshift_mug')
+ClassicalTracker(video_path='Test-Videos/Antoine_Mug.mp4', method='meanshift', color_space='hue')\
+  .track_video(visualize=False, save_result=True, output_dir='results/evaluation/meanshift_mug')
 PY
 ```
 
-3. Annotate and interpolate GT (keyframe workflow):
+Where to look
+--------------
+- `src/` — code (trackers, features, utils)
+- `scripts/` — annotation and helper scripts
+- `test/` — demo notebooks
+- `results/` — output (not versioned)
 
-```bash
-python scripts/annotate_video.py --video Test-Videos/Antoine_Mug.mp4 --output results/gt_mug --frames-file results/gt_mug/keyframes.txt
-python scripts/interpolate_gt.py --keyframes results/gt_mug/keyframes.txt --annotations results/gt_mug/annotations.csv --out_dir results/gt_mug
-```
+Evaluation
+----------
+Use `src/evaluation.evaluate(pred_csv, gt_csv, cle_threshold=20.0)` to compute IoU, center error and common metrics.
 
-4. Evaluate results:
+Contributing
+------------
+Add a `TrackerStrategy` implementation in `src/classical_tracker.py` and register it in the factory. Keep changes focused and add a short demo.
 
-```bash
-python - <<'PY'
-from src import evaluation
-res = evaluation.evaluate('results/evaluation/meanshift_mug/predictions.csv', 'results/gt_mug/gt.csv', cle_threshold=20.0)
-print(res)
-PY
-```
-
-## Contents (short)
-
-- `src/classical_tracker.py` — main controller and Strategy implementations (Mean-shift, Hough, predictive variants)
-- `src/features.py` — color & gradient helpers and visualizations
-- `src/deep_tracker.py` — CNN feature extractor and deep-mean-shift pipeline
-- `scripts/` — annotation and helper scripts (`annotate_video.py`, `interpolate_gt.py`, `select_keyframes.py`)
-- `test/` — notebooks and demos (e.g., `basic_questions.ipynb`)
-- `results/` — output directory (not tracked)
-
-## Recommended workflow
-
-1. Create GT for a video (annotate or interpolate keyframes).
-2. Run one or more trackers and save `predictions.csv` under `results/evaluation/<method>_<video>/`.
-3. Run `src/evaluation.evaluate()` to compute IoU, CLE, success/precision metrics.
-4. Inspect visualizations and diagnostics saved by trackers.
-
-## Contributing
-
-To add a new algorithm: implement a `TrackerStrategy` (see `src/classical_tracker.py`), register it in the factory, and add a brief demo script or notebook.
-
-## License & Contact
-
-Provided for research and education. Open an issue if you want help running experiments or generating diagnostics for result folders.
-# 🎯 Object Tracking Project
-
-Implementation and comparison of classical and deep learning object tracking algorithms.
-
----
-
-## 📂 Project Structure
-
-```
-object_tracking/
-├── src/                          # Core source code
-│   ├── classical_tracker.py     # Classical tracker (Strategy Pattern)
-│   ├── features.py               # Feature extraction (color/gradient)
-│   ├── utils.py                  # Utility functions (ROI selection, etc.)
-│   ├── tracking_mean_shift.py   # Legacy mean-shift implementation
-│   └── deep_tracker.py           # Deep learning tracker (TODO)
-│
-├── test/                         # Tests and demos
-│   └── basic_questions.ipynb    # Q1-Q4 demonstrations
-│
-├── Test-Videos/                  # Test videos
-│   ├── Antoine_Mug.mp4
-│   └── VOT-ball.mp4
-│
-├── results/                      # Output results (gitignored)
-│   ├── q1_basic/                # Q1 basic Mean-shift
-│   ├── q2_*/                    # Q2 improvements
-│   ├── q3_gradients/            # Q3 gradient visualization
-│   └── q4_hough_transform/      # Q4 Hough Transform
-│
-└── docs/                         # Documentation (optional)
-```
-
----
-
-## 🏗️ Architecture Design
-
-### Core Design Pattern: **Strategy Pattern**
-```
-
----
-
-##  架构设计
-
-### 核心设计模式：**策略模式 (Strategy Pattern)**
-
-```python
-# Architecture Overview
-ClassicalTracker (Main Controller)
-    ├── TrackerStrategy (Abstract Strategy Interface)
-    │   ├── MeanShiftStrategy      # Mean-shift implementation
-    │   └── HoughTransformStrategy # Hough Transform implementation
-    │
-    ├── TrackState (State Management)
-    │   ├── track_window           # Current tracking window
-    │   ├── model                  # Histogram / R-Table
-    │   ├── hough_accumulator      # Hough accumulator (Q4)
-    │   └── search_region          # Search region
-    │
-    └── GradientSidecar (Gradient Visualization Plugin)
-```
+License / Contact
+-----------------
+Provided for research and education. Open an issue for help or requests.
 
 ### Why Strategy Pattern?
 
@@ -396,7 +308,6 @@ jupyter notebook test/basic_questions.ipynb
 
 - Python: 3.10+
 - OpenCV: 4.8.0+
-- OS: macOS / Linux / Windows
 
 ---
 
@@ -518,15 +429,7 @@ Deep:        Feature Gradients → R-Table → Voting
 - Build R-Table from feature orientations
 - Vote using semantic edge information
 
-#### Advantages:
-- ✅ **Illumination robustness**: CNN features normalized during training
-- ✅ **Semantic understanding**: Distinguish objects beyond color
-- ✅ **Better discrimination**: Learned features > hand-crafted
 
-#### Trade-offs:
-- ❌ **Speed**: ~10-50ms per frame (GPU required)
-- ❌ **Memory**: ~50-100MB feature maps
-- ❌ **Domain**: Trained on ImageNet, may not generalize everywhere
 
 #### Implementation:
 See `src/deep_tracker.py` for complete implementation:
