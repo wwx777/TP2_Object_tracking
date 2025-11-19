@@ -145,8 +145,8 @@ class OSTrack:
         self,
         use_optional_box: bool = True,
         visualize: bool = True,
-        save_result: bool = False,
-        output_dir: str = "results/ostrack",
+        save_result: bool = True,
+        output_dir: str = "../results/ostrack",
     ):
         """
         调用官方 EvalTracker.run_video.
@@ -157,16 +157,28 @@ class OSTrack:
             True  -> 先在第一帧选 ROI，然后把这个 bbox 作为 `optional_box` 传给 OSTrack。
             False -> 不传 optional_box，完全交给官方代码（有的版本会要求在命令行指定 bbox）。
         visualize : bool
-            这里只能通过 OSTrack 自己的可视化控制。大部分版本 run_video()
-            总是开一个窗口显示跟踪结果，没有额外开关。
+            True  -> 通过 OSTrack 的 cv2.imshow 显示跟踪结果窗口。
+            False -> 不显示窗口，但仍然可以保存每一帧 PNG。
         save_result : bool
-            是否让 OSTrack 把结果存到它自己的 tracking_results 目录下。
-            注意：官方 video_demo.py 一般是通过 argparse 的参数控制保存路径，
-            这里我们只能尽量模拟。
+            是否让 OSTrack 把结果存到它自己的 tracking_results 目录下，
+            同时也控制是否额外保存每一帧 PNG。
         output_dir : str
-            仅当 save_result=True 时有意义。具体路径由 OSTrack 的环境设置决定，
-            这里只是给一个提示，真正的结果目录还是看 lib/test/evaluation/local.py
+            仅当 save_result=True 时有意义。
+            本函数会在 output_dir 下创建子目录 `frames_png` 保存每一帧 PNG。
         """
+        import os
+        import cv2
+
+        # 0) 准备保存 PNG 的目录（与 save_result 绑定）
+        if save_result:
+            frames_dir = output_dir
+            os.makedirs(frames_dir, exist_ok=True)
+            if self.debug:
+                print(f"[OSTrack wrapper] Saving frame PNGs to: {frames_dir}")
+        else:
+            frames_dir = None
+            if self.debug:
+                print("[OSTrack wrapper] save_result=False, will NOT save frame PNGs.")
 
         # 1) 选 ROI（如果需要）
         if use_optional_box:
@@ -181,42 +193,63 @@ class OSTrack:
             if self.debug:
                 print("[OSTrack wrapper] Running without optional_box")
 
-        # 2) 调用官方的 run_video
-        # 官方 Tracker.run_video 的常见签名是：
-        #     run_video(video: str, optional_box: list = None, save_results: bool = False)
-        # 有的版本还会有 debug/vis 等参数，但我们只传最基本的几个，保证兼容性。
-        try:
-            # 注意：这里不做任何“加速视频”的处理，只是单纯调用 OSTrack 的原始逻辑
-            self.eval_tracker.run_video(
-                self.video_path,
-                optional_box=list(optional_box) if optional_box is not None else None,
-                save_results=bool(save_result),
-            )
-        except TypeError as e:
-            # 万一当前版本的 run_video 参数名稍微不一样，就走一个保底调用
-            if self.debug:
-                print(f"[OSTrack wrapper] run_video signature mismatch: {e}")
-                print("[OSTrack wrapper] Retrying with positional arguments only.")
-            if optional_box is not None:
-                self.eval_tracker.run_video(self.video_path, list(optional_box))
+        # 2) Monkey Patch cv2.imshow，用来截获每一帧并保存 PNG
+        #    - 如果 visualize=False，则不再真正弹窗，只保存 PNG
+        #    - 最后一定恢复原来的 imshow
+        orig_imshow = getattr(cv2, "imshow", None)
+        frame_idx = {"i": 0}  # 用 dict 是为了在闭包里可变
+
+        def imshow_hook(winname, img):
+            # 保存 PNG
+            if frames_dir is not None:
+                png_path = os.path.join(frames_dir, f"Frame_{frame_idx['i']:04d}.png")
+                cv2.imwrite(png_path, img)
+                frame_idx["i"] += 1
+                if self.debug and frame_idx["i"] % 50 == 0:
+                    print(f"[OSTrack wrapper] Saved frame {frame_idx['i']} to {png_path}")
+
+            # 控制是否真正显示窗口
+            if visualize and orig_imshow is not None:
+                return orig_imshow(winname, img)
             else:
-                self.eval_tracker.run_video(self.video_path)
+                # 不显示窗口时，直接返回即可
+                return None
+
+        # 如果环境里本来就没有 imshow，就不打补丁
+        if orig_imshow is not None:
+            cv2.imshow = imshow_hook
+            if self.debug:
+                print("[OSTrack wrapper] cv2.imshow has been patched for frame saving.")
+        else:
+            if self.debug:
+                print("[OSTrack wrapper] cv2.imshow not found, cannot patch for frame saving.")
+
+        # 3) 调用官方的 run_video
+        try:
+            try:
+                self.eval_tracker.run_video(
+                    self.video_path,
+                    optional_box=list(optional_box) if optional_box is not None else None,
+                    save_results=bool(save_result),
+                )
+            except TypeError as e:
+                # 万一当前版本的 run_video 参数名稍微不一样，就走一个保底调用
+                if self.debug:
+                    print(f"[OSTrack wrapper] run_video signature mismatch: {e}")
+                    print("[OSTrack wrapper] Retrying with positional arguments only.")
+                if optional_box is not None:
+                    self.eval_tracker.run_video(self.video_path, list(optional_box))
+                else:
+                    self.eval_tracker.run_video(self.video_path)
+        finally:
+            # 4) 一定要恢复 imshow，避免影响别的代码
+            if orig_imshow is not None:
+                cv2.imshow = orig_imshow
+                if self.debug:
+                    print("[OSTrack wrapper] cv2.imshow has been restored.")
 
         print("\n[OSTrack wrapper] Tracking finished (official run_video).")
+        if frames_dir is not None:
+            print(f"[OSTrack wrapper] Saved {frame_idx['i']} frame PNGs to: {frames_dir}")
 
-
-if __name__ == "__main__":
-    import sys as _sys
-
-    if len(_sys.argv) < 2:
-        print("Usage: python -m src.ostrack <video_path>")
-        _sys.exit(1)
-
-    _video_path = _sys.argv[1]
-    _tracker = OSTrack(
-        video_path=_video_path,
-        config_name="vitb_256_mae_ce_32x4_ep300",
-        device="cuda",
-        debug=True,
-    )
-    _tracker.track_video(use_optional_box=True, visualize=True, save_result=False)
+   
