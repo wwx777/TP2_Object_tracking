@@ -184,27 +184,41 @@ class SiameseTracker:
             print("\nInitializing real Siamese network...")
             self.initialize(frame, roi)
             
-            # 创建输出目录并准备保存工具
+            # 创建输出目录
             if save_result:
-                os.makedirs(output_dir, exist_ok=True)
+                from pathlib import Path
+                import pandas as pd
+                
+                out_path = Path(output_dir)
+                out_path.mkdir(parents=True, exist_ok=True)
                 print(f"Results will be saved to: {output_dir}")
-                # 延迟导入以避免模块导入时的相对路径问题
-                try:
-                    from .utils import save_frame, save_prediction, save_meta
-                except Exception:
-                    # 如果作为脚本直接运行，尝试非相对导入
-                    from utils import save_frame, save_prediction, save_meta
-                import time
-                total_start_time = time.time()
             
             frame_idx = 1
             fps_list = []
+            predictions = []
             
             print("\n" + "="*60)
             print("🎯 Tracking with REAL Siamese Network (GOT-10k trained)")
             print("="*60)
             print("Press ESC to quit | Press 'p' to pause")
             print("="*60 + "\n")
+            
+            # 处理第一帧
+            x, y, w, h = roi
+            out = frame.copy()
+            cv2.rectangle(out, (x, y), (x + w, y + h), (0, 255, 0), 3)
+            cv2.putText(out, f'Real Siamese Network (GOT-10k)', (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            cv2.putText(out, f'Frame: {frame_idx}', (10, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            
+            if save_result:
+                cv2.imwrite(str(out_path / f'Frame_{frame_idx:04d}.png'), out)
+                predictions.append({'frame': frame_idx, 'x': x, 'y': y, 'w': w, 'h': h})
+            
+            if visualize:
+                cv2.imshow('Real Siamese Network Tracker (GOT-10k)', out)
+                cv2.waitKey(1)
             
             # 处理剩余帧
             while True:
@@ -213,6 +227,8 @@ class SiameseTracker:
                 ret, frame = cap.read()
                 if not ret:
                     break
+                
+                frame_idx += 1
                 
                 # 跟踪
                 bbox = self.update(frame)
@@ -232,13 +248,13 @@ class SiameseTracker:
                 
                 # 显示信息
                 cv2.putText(out, f'Real Siamese Network (GOT-10k)', (10, 30),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 cv2.putText(out, f'Frame: {frame_idx}', (10, 60),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 cv2.putText(out, f'FPS: {avg_fps:.1f}', (10, 90),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                 cv2.putText(out, f'BBox: ({x},{y},{w},{h})', (10, 120),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
                 
                 # 显示
                 if visualize:
@@ -246,13 +262,8 @@ class SiameseTracker:
                 
                 # 保存
                 if save_result:
-                    filename = f'frame_{frame_idx:04d}.jpg'
-                    cv2.imwrite(os.path.join(output_dir, filename), out)
-                    try:
-                        # 追加保存预测到 CSV（columns: frame,x,y,w,h）
-                        save_prediction(output_dir, frame_idx, (x, y, w, h))
-                    except Exception as e:
-                        print(f"Failed to save prediction for frame {frame_idx}: {e}")
+                    cv2.imwrite(str(out_path / f'Frame_{frame_idx:04d}.png'), out)
+                    predictions.append({'frame': frame_idx, 'x': x, 'y': y, 'w': w, 'h': h})
                 
                 # 键盘控制
                 key = cv2.waitKey(1) & 0xFF
@@ -263,8 +274,6 @@ class SiameseTracker:
                     print("\nPaused. Press any key to continue...")
                     cv2.waitKey(0)
                 
-                frame_idx += 1
-                
                 # 定期打印进度
                 if frame_idx % 50 == 0:
                     print(f"📊 Frame {frame_idx} | Avg FPS: {avg_fps:.1f}")
@@ -272,16 +281,17 @@ class SiameseTracker:
             print("\n" + "="*60)
             print("✅ Tracking Completed!")
             print("="*60)
-            frames_processed = max(0, frame_idx - 1)
+            frames_processed = max(0, frame_idx)
             print(f"Total frames processed: {frames_processed}")
             print(f"Average FPS: {np.mean(fps_list):.1f}")
+            
+            # 保存 predictions.csv
             if save_result:
-                try:
-                    total_time = time.time() - total_start_time
-                    save_meta(output_dir, frames_processed, total_time)
-                except Exception:
-                    pass
+                df = pd.DataFrame(predictions)
+                csv_path = out_path / "predictions.csv"
+                df.to_csv(csv_path, index=False)
                 print(f"Results saved to: {output_dir}")
+                print(f"Saved {len(predictions)} frames and predictions.csv")
             print("="*60 + "\n")
         
         finally:
@@ -295,8 +305,6 @@ class SiameseTracker:
                 cv2.waitKey(1)
             except:
                 pass
-
-
 def download_pretrained_model():
     """下载预训练模型的辅助函数"""
     print("\n" + "="*60)
