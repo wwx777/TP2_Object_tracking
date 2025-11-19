@@ -19,13 +19,13 @@ Usage in notebook:
 
     tracker = OSTrack(
         video_path=VIDEO,
-        config_name='vitb_256_mae_ce_32x4_ep300',  # 对应 experiments/ostrack/ 下的 yaml
-        device='cpu',                               # 或 'cuda:0'
+        config_name='vitb_256_mae_ce_32x4_ep300',  # corresponds to a yaml under experiments/ostrack/
+        device='cpu',                               # or 'cuda:0'
         debug=True
     )
 
     tracker.track_video(
-        use_optional_box=True,     # True: 先选 ROI，然后以该框作为初始 bbox
+        use_optional_box=True,     # True: select ROI first and use it as the initial bbox
         visualize=True,
         save_result=False,
         output_dir='../results/qX_ostrack'
@@ -41,7 +41,7 @@ import numpy as np
 import types as _types
 
 # ---------------------------------------------------------------------
-# 0. 兼容 OSTrack 代码里对 torch._six 的老依赖
+# 0. Compatibility shim for OSTrack's old dependency on torch._six
 # ---------------------------------------------------------------------
 try:
     from torch._six import string_classes  # type: ignore
@@ -53,11 +53,11 @@ except ModuleNotFoundError:
     sys.modules["torch._six"] = six_mod
 
 # ---------------------------------------------------------------------
-# 1. 把官方 OSTrack 仓库加入 sys.path
+# 1. Add the official OSTrack repository to sys.path
 # ---------------------------------------------------------------------
 THIS_DIR = os.path.dirname(__file__)
 PROJECT_ROOT = os.path.abspath(os.path.join(THIS_DIR, ".."))
-OSTRACK_ROOT = os.path.join(PROJECT_ROOT, "OSTrack")  # 你已经放在和 src 并列了
+OSTRACK_ROOT = os.path.join(PROJECT_ROOT, "OSTrack")  # assume it's placed alongside `src`
 
 if OSTRACK_ROOT not in sys.path:
     sys.path.insert(0, OSTRACK_ROOT)
@@ -68,18 +68,18 @@ try:
 except ImportError as e:
     raise ImportError(
         "Cannot import OSTrack's lib.test.evaluation.\n"
-        "请确认：\n"
-        "1) 官方 OSTrack 仓库已克隆到 project_root/OSTrack\n"
-        "2) 当前 conda 环境已经按 OSTrack/install.sh 安装好依赖\n"
-        "3) 已经执行过 python tracking/create_default_local_file.py"
+        "Please ensure:\n"
+        "1) The official OSTrack repository is cloned to project_root/OSTrack\n"
+        "2) Your conda environment has dependencies installed per OSTrack/install.sh\n"
+        "3) You have run `python tracking/create_default_local_file.py`"
     ) from e
 
 
 class OSTrack:
     """
-    高层接口：直接调用官方 EvalTracker.run_video 做 demo。
+    High-level interface: call the official EvalTracker.run_video for demos.
 
-    和你 notebook 里之前占位版的 API 尽量保持一致：
+    Keep the API consistent with the placeholder used in your notebook:
         tracker = OSTrack(...)
         tracker.track_video(...)
     """
@@ -96,15 +96,15 @@ class OSTrack:
         self.device = device
         self.debug = debug
 
-        # env_settings() 主要用来读 local.py；这里调用一下确保其正确
+        # env_settings() mainly reads local.py; call it here to ensure it's configured
         _ = env_settings()
 
-        # EvalTracker: 官方评测 / demo 用的高层 Tracker
-        # 注意：run_id 必须是 None 或 int，否则你遇到的那个 AssertionError 就会出现
+        # EvalTracker: official evaluation/demo high-level Tracker
+        # Note: run_id must be None or an int, otherwise an AssertionError may occur
         self.eval_tracker = EvalTracker(
             name="ostrack",
             parameter_name=self.config_name,
-            dataset_name="video_demo",  # 只是一个标签，对 run_video 不重要
+            dataset_name="video_demo",  # just a label; not important for run_video
             run_id=None,
         )
 
@@ -114,10 +114,10 @@ class OSTrack:
                 f"name='ostrack', param='{self.config_name}', dataset='video_demo')"
             )
 
-    # ---------------- 高层接口 ----------------
+    # ---------------- High-level API ----------------
 
     def _select_roi_on_first_frame(self) -> Tuple[float, float, float, float] | None:
-        """在第一帧上用 OpenCV 交互式选择 ROI."""
+        """Interactively select an ROI on the first frame using OpenCV."""
         cap = cv2.VideoCapture(self.video_path)
         ret, frame = cap.read()
         cap.release()
@@ -149,27 +149,27 @@ class OSTrack:
         output_dir: str = "../results/ostrack",
     ):
         """
-        调用官方 EvalTracker.run_video.
+        Call the official EvalTracker.run_video.
 
         Parameters
         ----------
         use_optional_box : bool
-            True  -> 先在第一帧选 ROI，然后把这个 bbox 作为 `optional_box` 传给 OSTrack。
-            False -> 不传 optional_box，完全交给官方代码（有的版本会要求在命令行指定 bbox）。
+            True  -> Select an ROI on the first frame and pass it to OSTrack as `optional_box`.
+            False -> Do not pass an optional_box; let the official code handle initialization.
         visualize : bool
-            True  -> 通过 OSTrack 的 cv2.imshow 显示跟踪结果窗口。
-            False -> 不显示窗口，但仍然可以保存每一帧 PNG。
+            True  -> Display tracking results via OSTrack's `cv2.imshow` windows.
+            False -> Do not display windows, but frames can still be saved as PNGs.
         save_result : bool
-            是否让 OSTrack 把结果存到它自己的 tracking_results 目录下，
-            同时也控制是否额外保存每一帧 PNG。
+            Whether to let OSTrack save results to its `tracking_results` directory
+            and whether to save per-frame PNGs.
         output_dir : str
-            仅当 save_result=True 时有意义。
-            本函数会在 output_dir 下创建子目录 `frames_png` 保存每一帧 PNG。
+            Only meaningful when `save_result=True`. This function will create
+            a `frames_png` subdirectory under `output_dir` to store per-frame PNGs.
         """
         import os
         import cv2
 
-        # 0) 准备保存 PNG 的目录（与 save_result 绑定）
+        # 0) Prepare directory for saving PNGs (tied to save_result)
         if save_result:
             frames_dir = output_dir
             os.makedirs(frames_dir, exist_ok=True)
@@ -180,7 +180,7 @@ class OSTrack:
             if self.debug:
                 print("[OSTrack wrapper] save_result=False, will NOT save frame PNGs.")
 
-        # 1) 选 ROI（如果需要）
+        # 1) Select ROI (if requested)
         if use_optional_box:
             optional_box = self._select_roi_on_first_frame()
             if optional_box is None:
@@ -193,14 +193,14 @@ class OSTrack:
             if self.debug:
                 print("[OSTrack wrapper] Running without optional_box")
 
-        # 2) Monkey Patch cv2.imshow，用来截获每一帧并保存 PNG
-        #    - 如果 visualize=False，则不再真正弹窗，只保存 PNG
-        #    - 最后一定恢复原来的 imshow
+        # 2) Monkey-patch `cv2.imshow` to capture each frame and save PNGs
+        #    - If visualize=False, do not open GUI windows; only save PNGs
+        #    - Always restore the original imshow afterwards
         orig_imshow = getattr(cv2, "imshow", None)
-        frame_idx = {"i": 0}  # 用 dict 是为了在闭包里可变
+        frame_idx = {"i": 0}  # use dict so it's mutable inside the closure
 
         def imshow_hook(winname, img):
-            # 保存 PNG
+            # Save PNG
             if frames_dir is not None:
                 png_path = os.path.join(frames_dir, f"Frame_{frame_idx['i']:04d}.png")
                 cv2.imwrite(png_path, img)
@@ -208,14 +208,14 @@ class OSTrack:
                 if self.debug and frame_idx["i"] % 50 == 0:
                     print(f"[OSTrack wrapper] Saved frame {frame_idx['i']} to {png_path}")
 
-            # 控制是否真正显示窗口
+            # Control whether to actually display the window
             if visualize and orig_imshow is not None:
                 return orig_imshow(winname, img)
             else:
-                # 不显示窗口时，直接返回即可
+                # If not showing a window, just return
                 return None
 
-        # 如果环境里本来就没有 imshow，就不打补丁
+        # If imshow does not exist in the environment, do not patch it
         if orig_imshow is not None:
             cv2.imshow = imshow_hook
             if self.debug:
@@ -224,7 +224,7 @@ class OSTrack:
             if self.debug:
                 print("[OSTrack wrapper] cv2.imshow not found, cannot patch for frame saving.")
 
-        # 3) 调用官方的 run_video
+        # 3) Call the official run_video
         try:
             try:
                 self.eval_tracker.run_video(
@@ -233,7 +233,7 @@ class OSTrack:
                     save_results=bool(save_result),
                 )
             except TypeError as e:
-                # 万一当前版本的 run_video 参数名稍微不一样，就走一个保底调用
+                # In case the current run_video signature differs slightly, fall back to a safer call
                 if self.debug:
                     print(f"[OSTrack wrapper] run_video signature mismatch: {e}")
                     print("[OSTrack wrapper] Retrying with positional arguments only.")
@@ -242,7 +242,7 @@ class OSTrack:
                 else:
                     self.eval_tracker.run_video(self.video_path)
         finally:
-            # 4) 一定要恢复 imshow，避免影响别的代码
+            # 4) Restore imshow to avoid affecting other code
             if orig_imshow is not None:
                 cv2.imshow = orig_imshow
                 if self.debug:
